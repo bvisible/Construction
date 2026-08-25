@@ -1618,6 +1618,13 @@ async def warranty_claim_pdf(
             media_type="application/pdf",
             headers={
                 "Content-Disposition": (f'attachment; filename="warranty-claim-{w_id}.pdf"'),
+                # The claim sheet is assembled from the English labels a few
+                # lines above and no locale reaches them, so the route declares
+                # English instead of letting the Accept-Language middleware name
+                # the reader's language on it. The buyer's own description is
+                # copied through verbatim, which is a different axis: the labels
+                # are English whatever language the complaint was written in.
+                "Content-Language": "en",
             },
         )
     except Exception:
@@ -1627,6 +1634,10 @@ async def warranty_claim_pdf(
             content=body.encode("utf-8"),
             media_type="text/plain; charset=utf-8",
             headers={
+                # Same text, same labels, so the same declaration. A fallback
+                # that drops the header would make the language of this document
+                # depend on whether reportlab happened to be importable.
+                "Content-Language": "en",
                 "Content-Disposition": (f'attachment; filename="warranty-claim-{w_id}.txt"'),
             },
         )
@@ -2886,6 +2897,7 @@ async def quote_sales_contract_taxes(
 
     from app.modules.property_dev.tax_engine import (
         MissingRegionSubcodeError,
+        RateNotInForceError,
         UnknownRateClassError,
         UnsupportedJurisdictionError,
     )
@@ -2927,6 +2939,30 @@ async def quote_sales_contract_taxes(
             status_code=422,
             detail={
                 "error": "unknown_rate_class",
+                "message": str(exc),
+            },
+        )
+    except RateNotInForceError as exc:
+        # The engine refuses a date it has no rate for rather than quoting zero,
+        # so this is the one place that decides what the caller is told. Both
+        # dates go in the body: knowing that the earliest rate begins
+        # 2011-01-04 is what lets a caller correct the signing date or add the
+        # historical band, where a bare amount of zero left nothing to act on.
+        # effective_on arrives from the contract's own signing_date rather than
+        # from the request body, so a stored contract signed before the band is
+        # what reaches here.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "rate_not_in_force",
+                "jurisdiction": exc.jurisdiction,
+                "rate_class": exc.rate_class,
+                # isoformat rather than the date objects: this detail dict is
+                # rendered by FastAPI's default handler through json.dumps,
+                # which has no encoder for date and would turn the refusal into
+                # a 500. The clauses above pass only strings for the same reason.
+                "effective_on": exc.effective_on.isoformat(),
+                "effective_from": exc.effective_from.isoformat(),
                 "message": str(exc),
             },
         )
@@ -4353,6 +4389,13 @@ async def stream_propdev_document(
             "Content-Disposition": f'attachment; filename="{filename}"',
             "X-Document-Type": doc_type,
             "X-Document-Locale": locale,
+            # ``locale`` has been through _normalise_locale, so it names a
+            # catalogue that exists on disk rather than the one the reader
+            # asked for. Say it in the standard header too: X-Document-Locale
+            # carries the same value but no client is obliged to know it, and
+            # without this the Accept-Language middleware would label an
+            # English deed with whatever language the browser requested.
+            "Content-Language": locale,
         },
     )
 
@@ -6261,6 +6304,17 @@ async def compliance_regulator_report(
             media_type="application/pdf",
             headers={
                 "Content-Disposition": (f'attachment; filename="{report.regulator}_{report.quarter}.pdf"'),
+                # Read off the report rather than assumed, because on this route
+                # the language is a property of the regulator and not of the
+                # reader: the 214-FZ quarterly report is written in Russian and
+                # the other three in English. A literal here would mislabel one
+                # of the four for every reader, and the reader cannot be the
+                # input either, since a Russian filing does not become English
+                # because a London office opened it. The generator is the only
+                # thing that knows, so it says. The payload branch below
+                # deliberately declares nothing: whether a machine submission
+                # carries a language is a separate decision from this one.
+                "Content-Language": report.language,
             },
         )
     if as_ == "payload":
@@ -6279,6 +6333,7 @@ async def compliance_regulator_report(
         quarter=report.quarter,
         generated_at=report.generated_at,
         pdf_base64=base64.b64encode(report.pdf_bytes).decode("ascii"),
+        pdf_language=report.language,
         payload_format=report.payload_format,
         payload_base64=base64.b64encode(report.payload_bytes).decode("ascii"),
         summary=report.summary,

@@ -33,6 +33,7 @@ from app.modules.changeorders.schemas import (
     ChangeOrderItemCreate,
     ChangeOrderItemUpdate,
     ChangeOrderUpdate,
+    SimulateImpactResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -531,6 +532,7 @@ class ChangeOrderService:
                 title=data.title,
                 description=data.description,
                 reason_category=data.reason_category,
+                variation_type=data.variation_type,
                 schedule_impact_days=data.schedule_impact_days,
                 currency=currency,
                 cost_impact=initial_cost_impact,
@@ -714,10 +716,17 @@ class ChangeOrderService:
 
         Nothing is persisted. The baseline budget/EVM figures come from the
         same finance aggregation that powers the dashboard, converted into the
-        project's base currency (never blending currencies); the CO's own cost
-        is FX-converted the same way before being layered on top. The result
-        lets a reviewer see the budget, finish-date, EVM and BOQ consequences
-        of approving the CO *before* deciding.
+        project's base currency; the CO's own cost is FX-converted the same way
+        before being layered on top. The result lets a reviewer see the budget,
+        finish-date, EVM and BOQ consequences of approving the CO *before*
+        deciding.
+
+        A project currency with no configured FX rate is counted in its own
+        units rather than dropped, so the figure degrades visibly instead of
+        silently shrinking. It is only visible if somebody says so, which is
+        why every such code is collected into ``baseline_fx_missing`` and named
+        in ``notes``. Blending without reporting the blend would leave the
+        baseline looking like a converted number when it is not one.
         """
         from app.modules.finance.repository import BudgetRepository
         from app.modules.finance.service import _convert_to_base, _project_fx_map
@@ -738,8 +747,18 @@ class ChangeOrderService:
 
         agg = await BudgetRepository(self.session).aggregate_for_dashboard(project_id=order.project_id)
 
+        # ``_convert_to_base`` sums an unrateable currency in its own units and
+        # hands back the code so the caller can say so. Five baseline figures go
+        # through here, so the codes are collected across all of them rather than
+        # per call: the reviewer needs to know the budget is blended, not which
+        # of five aggregates first revealed it.
+        baseline_fx_missing: list[str] = []
+
         def _base(amounts: dict) -> Decimal:
-            converted, _missing = _convert_to_base(amounts, base_currency=base_ccy, fx_rates_map=fx_map)
+            converted, missing = _convert_to_base(amounts, base_currency=base_ccy, fx_rates_map=fx_map)
+            for code in missing:
+                if code not in baseline_fx_missing:
+                    baseline_fx_missing.append(code)
             return Decimal(str(converted))
 
         revised = _base(agg["revised_by_currency"])
@@ -766,6 +785,15 @@ class ChangeOrderService:
         else:
             co_cost_base = co_cost_native
             fx_converted = True
+
+        if baseline_fx_missing:
+            codes = ", ".join(baseline_fx_missing)
+            plural = "those currencies are" if len(baseline_fx_missing) > 1 else "that currency is"
+            notes.append(
+                f"No FX rate is configured for {codes}, so project budget held in {plural} counted "
+                f"unconverted in the baseline and EVM figures below. Add the missing rate in project "
+                f"settings for an accurate comparison."
+            )
 
         # A preview reports what it can see; an unreadable count is shown as an
         # empty one, which is what this endpoint has always done, and the note
@@ -814,6 +842,7 @@ class ChangeOrderService:
             "co_currency": co_currency or base_ccy,
             "co_cost_base": str(_round2(co_cost_base)),
             "fx_converted": fx_converted,
+            "baseline_fx_missing": baseline_fx_missing,
             "notes": notes,
             **projection,
         }
@@ -825,6 +854,15 @@ class ChangeOrderService:
         without bound. Storing in ``metadata_`` (rather than a dedicated
         column) keeps this LIGHTWEIGHT and avoids a migration - the data is
         display/audit-only and read-rarely.
+
+        The projection is stored as the API renders it rather than as the
+        service builds it. ``simulate_impact`` returns ``order_id`` as a
+        ``uuid.UUID``, which the JSONB column's serializer cannot encode, so
+        storing the dict verbatim raised on every call and no scenario was ever
+        saved. Rendering through the response model fixes that where the write
+        happens, keeps the stored record identical to the shape the reviewer
+        actually saw, and refuses a payload that is not a projection rather
+        than writing something misshapen and finding out on read.
         """
         order = await self.get_order(order_id)
         md = dict(order.metadata_) if isinstance(order.metadata_, dict) else {}
@@ -832,7 +870,7 @@ class ChangeOrderService:
         scenarios.append(
             {
                 "at": datetime.now(UTC).isoformat(),
-                "snapshot": snapshot,
+                "snapshot": SimulateImpactResponse(**snapshot).model_dump(mode="json"),
             }
         )
         md["simulations"] = scenarios[-10:]

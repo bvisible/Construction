@@ -3048,6 +3048,27 @@ def create_app() -> FastAPI:
             except Exception:
                 logger.warning("Takeoff duplicate-document heal skipped (non-fatal)", exc_info=True)
 
+            # Ask, BEFORE any DDL, whether this database arrived holding
+            # application tables while recording no migration revision. After
+            # create_all below, every database has oe_* tables and the question
+            # is unanswerable, so the answer has to be taken here and carried
+            # down to the stamp. Defaults to False, so any failure to tell
+            # leaves the previous behaviour exactly as it was.
+            _arrived_populated_unstamped = False
+            try:
+                from app.core.alembic_version_table import database_is_populated_but_unstamped
+
+                async with engine.connect() as conn:
+                    _arrived_populated_unstamped = await conn.run_sync(database_is_populated_but_unstamped)
+                if _arrived_populated_unstamped:
+                    logger.warning(
+                        "This database holds application tables but records no migration revision, so it "
+                        "is not known to be at head. The boot-time stamp will be refused to keep that "
+                        "recoverable."
+                    )
+            except Exception:
+                logger.warning("Could not tell whether the database arrived unstamped (non-fatal)", exc_info=True)
+
             from app.core.postgres_migrator import postgres_auto_migrate
 
             # Nothing in this codebase ever runs ``alembic upgrade``, here or
@@ -3156,7 +3177,9 @@ def create_app() -> FastAPI:
 
             try:
                 async with engine.begin() as conn:
-                    stamped = await conn.run_sync(stamp_head_if_unstamped)
+                    stamped = await conn.run_sync(
+                        lambda c: stamp_head_if_unstamped(c, refuse_when_populated=_arrived_populated_unstamped)
+                    )
                 if stamped:
                     logger.info("Alembic version stamped to head %s on fresh DB", stamped)
             except Exception as exc:
@@ -3547,6 +3570,21 @@ def create_app() -> FastAPI:
                 _ft_register_jobs()
         except Exception:
             logger.exception("file_trash scheduler registration failed")
+
+        # ── Demo upload retention (24-hour interval) ──────────────────
+        # Removes visitor uploads older than the configured window from the
+        # public hosted demo, seeded demo content excluded. The registration
+        # helper returns without starting anything unless this deployment is a
+        # read-only demo AND an operator set a positive retention window, so a
+        # self-hosted install has no loop and nothing that could call the
+        # sweep. See :mod:`app.core.demo_retention`.
+        try:
+            if not _fast_startup:
+                from app.core.demo_retention import register_jobs as _retention_register_jobs
+
+                _retention_register_jobs()
+        except Exception:
+            logger.exception("demo_retention scheduler registration failed")
 
         # ── Cost-DB cache pre-warm (runs once, in background) ──────────
         # The "Add from Database" modal in the BOQ editor calls three

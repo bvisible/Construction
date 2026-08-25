@@ -34,6 +34,7 @@ import {
   Route,
   ArrowRight,
   Clock,
+  Hexagon,
   ListChecks,
   Layers,
   Search,
@@ -61,6 +62,7 @@ import {
   CountryFlagBackdrop,
   EmptyState,
 } from "@/shared/ui";
+import { fmtList } from "@/shared/lib/formatters";
 import { useNearViewport } from "@/shared/hooks/useNearViewport";
 import { useActiveProjectId } from "@/shared/hooks/useActiveProjectId";
 import { useProjectContextStore } from "@/stores/useProjectContextStore";
@@ -83,6 +85,7 @@ import {
   tintForCompany,
 } from "./companyTypes";
 import { ROLE_META, ROLE_BY_ID, rolesForPlaybook, tintForRole } from "./roles";
+import { modulesForPlaybook } from "./playbookModules";
 import { RoleAvatar } from "./RoleAvatar";
 import { RoleArt } from "./RoleArt";
 import { CaseArt } from "./CaseArt";
@@ -115,6 +118,7 @@ import type {
 } from "./types";
 
 import { regionDisplayName } from "./regions";
+import { homeMarketFirst, homeMarketForLanguage } from "./homeMarket";
 
 export function CasesPage() {
   const { playbookId } = useParams<{ playbookId?: string }>();
@@ -342,6 +346,21 @@ function CasesList() {
     (p: Playbook) => activeRegion === "all" || p.region === activeRegion,
     [activeRegion],
   );
+  // The market the reader's UI language speaks for, when the catalogue has
+  // cases for it. Five of the forty-two languages reach one; the rest reach
+  // null, and null is the whole behaviour for them - the catalogue keeps the
+  // order it always had.
+  //
+  // This ORDERS the grid, it does not narrow it: the market stays a shelf, and
+  // the reasoning above the shelf still holds, because a language default that
+  // preselected a country would hide the 140 universal cases from exactly the
+  // readers whose language names a market. Nor does it write anything: the
+  // hub's market pick is persisted (`oe_cases_region`), and a stored pick this
+  // never touches is a stored pick this can never overwrite.
+  const homeMarket = useMemo(
+    () => homeMarketForLanguage(i18n.language, regions),
+    [i18n.language, regions],
+  );
 
   // Only surface a selector option that actually has a matching case, and scope
   // each option's availability + count by the OTHER two active filters, so a
@@ -411,7 +430,7 @@ function CasesList() {
   //
   // The market and the stage were both missing from this list, and the cost
   // was larger than a missing chip. This same list gates the summary strip AND
-  // the "Reset filters" link, so a market-only pick narrowed 164 cases to 13
+  // the "Reset filters" link, so a market-only pick narrowed 202 cases to 13
   // with nothing on screen naming the market and no control to undo it short
   // of reopening a panel that had folded itself away. Market comes first
   // because its shelf now sits above everything else on the page.
@@ -490,7 +509,7 @@ function CasesList() {
   // shortlist and a plain title/description text search. All narrow the list.
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return allPlaybooks.filter((pb) => {
+    const matched = allPlaybooks.filter((pb) => {
       if (!inCompany(pb)) return false;
       if (!inRole(pb)) return false;
       if (activeStage !== "all" && stageByPlaybook.get(pb.id) !== activeStage)
@@ -504,8 +523,15 @@ function CasesList() {
           defaultValue: pb.descDefault,
         })}`.toLowerCase();
       return haystack.includes(q);
-    }).sort(
-      (a, b) => (caseNumbers.get(a.id) ?? 0) - (caseNumbers.get(b.id) ?? 0),
+    });
+    // Then order it: the reader's own market in front, the rest of the
+    // catalogue behind it in the lifecycle order it always had. Not when the
+    // shortlist is showing - that list is the set this reader curated for this
+    // job, and re-ordering somebody's own shelf by their language is noise.
+    return homeMarketFirst(
+      matched,
+      showOnlyPinned ? null : homeMarket,
+      (pb) => caseNumbers.get(pb.id) ?? 0,
     );
   }, [
     allPlaybooks,
@@ -519,6 +545,7 @@ function CasesList() {
     showOnlyPinned,
     pinnedIds,
     caseNumbers,
+    homeMarket,
     t,
   ]);
 
@@ -687,9 +714,11 @@ function CasesList() {
 
               Country is a SHELF, not the catalogue's spine. Grouping the whole
               list by market was considered and rejected on the count: 140 of
-              164 cases carry no region, so a country grouping yields four
-              small labelled sections and one bucket holding 85% of the
-              catalogue under "everything else". Those cases are universal on
+              202 cases carry no region, so a country grouping yields six
+              small labelled sections and one bucket holding 69% of the
+              catalogue under "everything else". (Counted from ./data; the
+              catalogue grows, so re-count before leaning on the figures.)
+              Those cases are universal on
               purpose (see the `region` doc in ./types.ts), so that bucket is
               the product rather than a backlog to be worked off.
 
@@ -1601,6 +1630,37 @@ function CaseCard({
   const StageIcon = stage?.icon;
   const shownRoles = roles.slice(0, 3);
 
+  // The span of the case: the modules its steps walk through, in the order it
+  // reaches them. Resolved exactly the way the honeycomb on the case page
+  // resolves it - the key decides the word and `moduleLabel` is only its
+  // English fallback. Reading the label raw is the trap `types.ts` documents
+  // at length: a stale label reads correct in English and wrong in the other
+  // forty-two languages, and nothing on the screen can show the difference.
+  const moduleNames = modulesForPlaybook(pb).map((m) =>
+    m.labelKey ? t(m.labelKey, { defaultValue: m.label }) : m.label,
+  );
+  const shownModules = moduleNames.slice(0, 3);
+  const moreModules = moduleNames.length - shownModules.length;
+  const modulesSentence = t("cases.card.modules", {
+    defaultValue: "Modules: {{list}}",
+    list: fmtList(moduleNames),
+  });
+
+  // Who the case is written for. Every shipped case but one names at least one
+  // company type; the one that names none simply says nothing here rather than
+  // drawing an empty cell.
+  const companyNames = pb.companyTypes.map((id) =>
+    t(COMPANY_TYPE_BY_ID[id]?.labelKey ?? "", {
+      defaultValue: COMPANY_TYPE_BY_ID[id]?.labelDefault ?? id,
+    }),
+  );
+  const shownCompanies = companyNames.slice(0, 2);
+  const moreCompanies = companyNames.length - shownCompanies.length;
+  const companySentence = t("cases.card.company", {
+    defaultValue: "Written for: {{list}}",
+    list: fmtList(companyNames),
+  });
+
   return (
     <div
       ref={ref}
@@ -1848,6 +1908,34 @@ function CaseCard({
           {t(pb.titleKey, { defaultValue: pb.titleDefault })}
         </h3>
 
+        {/* Where the case goes. The other resting facts say how long it is;
+            this one says which parts of the platform it crosses, which is the
+            question the catalogue could not answer without opening a case. It
+            earns its line at rest rather than in the hover panel because the
+            panel is exactly as tall as the card and already full, while a card
+            that grows a line simply grows - and the same line lifts the panel
+            by its own height. */}
+        {shownModules.length > 0 && (
+          <p
+            className="flex items-center gap-1 text-2xs text-content-tertiary"
+            title={modulesSentence}
+          >
+            {/* Clipped for the grid, whole for a reader: the visible run is
+                cut to keep the cards dense, so the full list rides along in
+                the accessible tree instead of being cut with it. */}
+            <span className="sr-only">{modulesSentence}</span>
+            <Hexagon size={11} aria-hidden="true" className="shrink-0" />
+            <span aria-hidden="true" className="min-w-0 truncate">
+              {shownModules.join(" · ")}
+            </span>
+            {moreModules > 0 && (
+              <span aria-hidden="true" className="shrink-0 font-medium">
+                +{moreModules}
+              </span>
+            )}
+          </p>
+        )}
+
         {/* Progress bar (only once started) */}
         {started && (
           <div className="mt-3">
@@ -1932,33 +2020,71 @@ function CaseCard({
               </span>
             )}
           </div>
-          {roles.length > 0 && (
-            <div
-              className="flex items-center -space-x-1.5"
-              aria-label={roles
-                .map((id) =>
-                  t(ROLE_BY_ID[id]?.labelKey ?? "", {
-                    defaultValue: ROLE_BY_ID[id]?.labelDefault ?? id,
-                  }),
-                )
-                .join(", ")}
-            >
-              {shownRoles.map((id) =>
-                near ? (
-                  <RoleAvatar
-                    key={id}
-                    role={id}
-                    className="h-5 w-5 rounded-full ring-2 ring-slate-950"
-                    title={t(ROLE_BY_ID[id]?.labelKey ?? "", {
-                      defaultValue: ROLE_BY_ID[id]?.labelDefault ?? id,
-                    })}
-                  />
-                ) : null,
+          {/* Who this case is for: the kind of firm, named, beside the people
+              inside it who run it. One row rather than two, because the panel
+              is exactly as tall as the card and a row added below would be
+              clipped by the card's own overflow rather than shown. The company
+              names are DISPLAY - the public pages make theirs a link into the
+              filtered list, and a link in here would take the click the whole
+              card is meant to catch. */}
+          {(roles.length > 0 || shownCompanies.length > 0) && (
+            <div className="flex items-center gap-2">
+              {roles.length > 0 && (
+                <div
+                  className="flex shrink-0 items-center -space-x-1.5"
+                  aria-label={fmtList(
+                    roles.map((id) =>
+                      t(ROLE_BY_ID[id]?.labelKey ?? "", {
+                        defaultValue: ROLE_BY_ID[id]?.labelDefault ?? id,
+                      }),
+                    ),
+                  )}
+                >
+                  {shownRoles.map((id) =>
+                    near ? (
+                      <RoleAvatar
+                        key={id}
+                        role={id}
+                        className="h-5 w-5 rounded-full ring-2 ring-slate-950"
+                        title={t(ROLE_BY_ID[id]?.labelKey ?? "", {
+                          defaultValue: ROLE_BY_ID[id]?.labelDefault ?? id,
+                        })}
+                      />
+                    ) : null,
+                  )}
+                  {roles.length > 3 && (
+                    <span className="ml-2 text-[10px] font-medium text-white/70">
+                      +{roles.length - 3}
+                    </span>
+                  )}
+                </div>
               )}
-              {roles.length > 3 && (
-                <span className="ml-2 text-[10px] font-medium text-white/70">
-                  +{roles.length - 3}
-                </span>
+              {shownCompanies.length > 0 && (
+                <p className="flex min-w-0 items-center gap-1 text-[10px] font-medium text-white/70">
+                  {/* Same split as the module line: the run is clipped to the
+                      width the panel has, the whole list is read out.
+
+                      TEXT, NOT CONTROLS - and deliberately not consistent with
+                      the case page, where the same company names ARE buttons
+                      that narrow the catalogue. The asymmetry is the point.
+                      This whole card is one click target: the overlay is
+                      pointer-events-none so that a click anywhere on it opens
+                      the case, and a button or link here would swallow that
+                      click for the reader who aimed at the card and hit a word.
+                      The case page header has no competing target, so it can
+                      afford the control. Making the two surfaces match would
+                      break the card, not tidy it. casesCardFacts.test.tsx
+                      asserts zero <a> and zero <button> inside the card. */}
+                  <span className="sr-only">{companySentence}</span>
+                  <span aria-hidden="true" className="min-w-0 truncate">
+                    {shownCompanies.join(" · ")}
+                  </span>
+                  {moreCompanies > 0 && (
+                    <span aria-hidden="true" className="shrink-0">
+                      +{moreCompanies}
+                    </span>
+                  )}
+                </p>
               )}
             </div>
           )}

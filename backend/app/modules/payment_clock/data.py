@@ -42,6 +42,64 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+#: A country_code declares itself here when PAYMENT_REGIMES has no row for it
+#: and the reason is worth naming rather than left as a bare gap.
+#:
+#: Three values, not the two app.modules.property_dev.tax_engine uses for an
+#: absent VAT block, and the difference is what each absence is a claim
+#: about. VAT absence is a claim about a rate: a rate is a percentage
+#: regardless of which country charges it, so NOT_MODELLED there is closable
+#: by writing a row, with no change to the table's shape. A prompt payment
+#: regime is a claim about the shape of a law. NO_STATUTE and NOT_MODELLED
+#: are the same two ideas carried over, no such law, or a law we have not
+#: yet reduced to a row, and both are closable the same way, by writing a
+#: row once the research is done. DIFFERENT_SHAPE is not: Brazil Lei
+#: 14.133/2021 art. 141 obliges the public buyer to pay invoices in the order
+#: they were registered, which is an ordering rule, not a deadline measured
+#: in days from an event. No amount of research turns "pay in registration
+#: order" into a days-to-pay figure, because elapsed time since an event is
+#: not the thing the statute regulates. That is a fact about what the law is,
+#: not about how much of it we have modelled, and it is why this set carries
+#: a third value the tax table does not: two of these three are gaps this
+#: registry can close by adding a row, and one names a country whose statute
+#: this registry row shape cannot express at all. Collapsing the three into
+#: the tax engine two would erase exactly that distinction.
+NO_REGIME_NO_STATUTE = "no_statute"
+NO_REGIME_NOT_MODELLED = "not_modelled"
+NO_REGIME_DIFFERENT_SHAPE = "different_shape"
+
+#: All three, and only these three. _validate_no_regime_reasons refuses
+#: anything outside this set at import time.
+NO_REGIME_VALUES = frozenset({NO_REGIME_NO_STATUTE, NO_REGIME_NOT_MODELLED, NO_REGIME_DIFFERENT_SHAPE})
+
+#: country_code to one of NO_REGIME_VALUES, for a country researched to a
+#: category-assignable degree that turned up no row. Most of the world is
+#: simply absent from this dict, which is not a violation: nobody has looked,
+#: and the dict does not claim otherwise. A country present here has been
+#: looked at and named; that is the entire difference between an entry and a
+#: silent gap, and no_regime_reason() below is built to preserve it.
+NO_REGIME_REASONS: dict[str, str] = {
+    "BR": NO_REGIME_DIFFERENT_SHAPE,
+}
+
+#: country_code under active research whose search has not yet produced a
+#: result category-assignable enough for NO_REGIME_REASONS. Deliberately not
+#: a NO_REGIME_* value and deliberately not silence either: a wrong-instrument
+#: search is not evidence of absence, so a country here earns no value rather
+#: than a guessed one, but country_coverage.py can still say "held" instead of
+#: an unqualified MISSING indistinguishable from a country nobody has looked
+#: at yet.
+#:
+#: Empty today. CN and RU were held here until the search was run against the
+#: right instrument in each case - the State Council SME payment regulation
+#: rather than the Civil Code contract chapter, and the public procurement law
+#: rather than a construction-specific payment act, neither of which exists in
+#: the shape the earlier search assumed. Both now have rows of their own. The
+#: set stays because the state it names is real and the next country to reach
+#: it should land here rather than in silence.
+NO_REGIME_HELD: frozenset[str] = frozenset()
+
+
 PAYMENT_REGIMES: tuple[dict[str, Any], ...] = (
     {
         "code": "uk_hgcra",
@@ -599,9 +657,437 @@ PAYMENT_REGIMES: tuple[dict[str, Any], ...] = (
             "completion under § 8812; neither is computed by this regime."
         ),
     },
+    {
+        "code": "bg_commercial_act_303a",
+        "jurisdiction": "Bulgaria",
+        "country_code": "BG",
+        "statute": "Commercial Act (Търговски закон)",
+        "statute_reference": "Article 303a",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "application_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 14,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "reference_rate_plus_margin",
+        "interest_reference_rate": (
+            "Bulgarian National Bank base rate (основен лихвен процент), fixed on 1 January and 1 July of the current year"
+        ),
+        "interest_margin_percent": Decimal("10.000"),
+        "interest_fixed_percent": None,
+        "interest_statute": "Article 303a",
+        "notes": (
+            "An interest basis rather than a notice regime, the same shape as the EU Late Payment "
+            "Directive this article transposes: Article 303a sets a payment term and the interest that "
+            "runs when it is missed, with no payment or pay-less notice, so no_notice_effect is none. "
+            "Fourteen days from receipt of the invoice or of the goods or services is the term absent "
+            "agreement, written here as the final date for payment; the parties may agree a longer term "
+            "up to sixty days, and beyond that only by exception in duly justified circumstances or where "
+            "the nature of the goods or services requires it, so state the agreed final date on the "
+            "application where a contract sets one. The statutory interest is the BNB base rate in force "
+            "on 1 January or 1 July of the current year plus ten percentage points, which exceeds the "
+            "Directive's own floor of eight points over the ECB reference rate: Bulgaria's transposition "
+            "is stricter than the minimum, not a restatement of it, which is why this is a national row "
+            "rather than a case for the eu_late_payment regime. Sourced from two independent legal "
+            "practice guides rather than from the Commercial Act's own text, which this module has not "
+            "independently retrieved; a reader who needs the statute's wording rather than its effect "
+            "should go back to Article 303a before relying on the figures here. Whether Bulgarian public "
+            "procurement carries this same period or a separate one, the way the Directive's own Article "
+            "4 treats public authorities differently from transactions between undertakings, has not been "
+            "checked, so this row is not confirmed for a public Bulgarian contract specifically."
+        ),
+    },
+    {
+        "code": "ng_ppa_2007",
+        "jurisdiction": "Nigeria (public)",
+        "country_code": "NG",
+        "statute": "Public Procurement Act 2007",
+        "statute_reference": "section 37",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "application_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 60,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "contract",
+        "interest_reference_rate": "",
+        "interest_margin_percent": None,
+        "interest_fixed_percent": None,
+        "interest_statute": "",
+        "notes": (
+            "The clock for a payment owed by a Nigerian Ministry, Extra-Ministerial Office, government "
+            "agency, parastatal or corporation on the public procurement of goods, works or services, "
+            "which includes construction. Section 37(2) deems a payment delayed once it runs more than "
+            "sixty days from the submission of the invoice, valuation certificate, or confirmation or "
+            "authentication by the procuring entity, so enter that submission date as the application "
+            "date; the sixty days is written here as the final date for payment, following the convention "
+            "used for the other single-date regimes. The Act does not say whether the sixty days are "
+            "calendar or working days, and this entry assumes calendar days, the reading this table gives "
+            "every other statute that is silent on the point. There is no payment notice or pay-less "
+            "notice in the Act, so silence carries no consequence beyond the payment becoming delayed. "
+            "Section 37(3) does not fix a rate itself, it says a delayed payment attracts interest at the "
+            "rate specified in the contract document, and section 37(4) obliges every contract to carry "
+            "such a term, so the interest basis is contract by statutory command rather than by the Act's "
+            "own silence. No private-sector statutory payment clock was found for Nigeria: this Act "
+            "reaches only the procuring entities section 37(2) names, and nothing else retrieved sets a "
+            "statutory period for a private Nigerian construction contract. A private clock is therefore "
+            "not shipped as a second row; add one if a statute is later found rather than assuming this "
+            "public clock extends to it."
+        ),
+    },
+    {
+        "code": "ca_on_construction_act",
+        "jurisdiction": "Ontario, Canada",
+        "country_code": "CA",
+        "statute": "Construction Act, R.S.O. 1990, c. C.30, Part I.1",
+        "statute_reference": "sections 6.1, 6.3, 6.4, 6.5, 6.6 and 6.9",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "application_date",
+        "payment_notice_days": 14,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 28,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "applied_sum_becomes_notified_sum",
+        "interest_basis": "contract",
+        "interest_reference_rate": (
+            "Ontario Courts of Justice Act prejudgment interest rate, applied only where the contract "
+            "does not itself specify a rate"
+        ),
+        "interest_margin_percent": None,
+        "interest_fixed_percent": None,
+        "interest_statute": "Construction Act, section 6.9",
+        "notes": (
+            "The clock runs from the owner's receipt of a proper invoice, defined in section 6.1 and "
+            "meeting seven statutory requirements plus anything the contract adds, so enter that receipt "
+            "date as the application date. Payment is due within 28 days of receipt unless the owner "
+            "serves a notice of non-payment, stating the amount withheld and the reasons, within 14 days; "
+            "missing that 14 day window and the proper invoice must be paid in full, which is why the "
+            "no-notice effect is applied_sum_becomes_notified_sum. All references to days in this Part are "
+            "to calendar days, not business or working days, confirmed directly rather than assumed. "
+            "These timelines are mandatory and cannot be extended by contract (section 6.9 makes the "
+            "whole Part apply notwithstanding any other agreement), and they apply to contracts entered "
+            "into on or after 1 October 2019. A contractor paid by the owner must pay each subcontractor "
+            "within 7 days of receiving that payment (section 6.5), a downstream clock this regime does "
+            "not compute, and the same 7 day pass-through and its own notice-of-non-payment sequence "
+            "repeat at every lower level of the contracting pyramid. Interest is where this regime does "
+            "not fit the four interest bases cleanly: section 6.9 makes the contract rate govern where "
+            "the contract specifies one, and supplies the Courts of Justice Act prejudgment rate only as "
+            "the default when the contract is silent, which is a contract-primary-with-statutory-fallback "
+            "shape, not a floor, a ceiling, or the two compared and the greater taken. interest_basis is "
+            "written here as contract, the nearest of the four, but that undersells the fact that a real "
+            "statutory number applies when the contract says nothing; there is no fifth basis to name it "
+            "precisely without widening the vocabulary."
+        ),
+    },
+    {
+        "code": "in_msmed_2006",
+        "jurisdiction": "India",
+        "country_code": "IN",
+        "statute": "Micro, Small and Medium Enterprises Development Act, 2006",
+        "statute_reference": "sections 15 and 16",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "application_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 45,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "prescribed_rate",
+        "interest_reference_rate": (
+            "three times the bank rate notified by the Reserve Bank of India, compounded with monthly rests"
+        ),
+        "interest_margin_percent": None,
+        "interest_fixed_percent": None,
+        "interest_statute": "Micro, Small and Medium Enterprises Development Act, 2006, section 16",
+        "notes": (
+            "Buyer-size-scoped rather than construction-scoped: this Act reaches any buyer purchasing "
+            "goods or services, construction included, from a supplier registered as a micro or small "
+            "enterprise, and reaches nothing else, so it covers only that slice of a construction "
+            "contract's parties rather than the contract as such. Enter the day of acceptance, or of "
+            "deemed acceptance where no objection was raised within fifteen days of delivery, as the "
+            "application date. Section 15 caps any agreed payment period at forty five days from that "
+            "date; this row encodes that outer limit. Whether the Act sets a shorter period when no date "
+            "was agreed at all has not been confirmed and is not encoded here. There is no payment or "
+            "pay-less notice in the Act, so no_notice_effect is none. Section 16 interest is compound "
+            "interest with monthly rests, not simple interest, at three times the bank rate the Reserve "
+            "Bank of India notifies, running from the day after the statutory period expires, and it "
+            "applies notwithstanding any contrary agreement between the parties. Neither the multiplier "
+            "nor the monthly compounding has a field of its own here: interest_basis, interest_margin_"
+            "percent and interest_fixed_percent were built for an additive margin, a single prescribed "
+            "source, or a flat annual rate, none of which is three times a rate compounding monthly, so "
+            "the mechanism is written into interest_reference_rate as text rather than decomposed into "
+            "the numeric fields. This costs nothing today because interest_description() only renders a "
+            "sentence and nothing in this module computes an interest amount from these fields; it would "
+            "cost real accuracy the day something does."
+        ),
+    },
+    {
+        "code": "ru_44fz_public",
+        "jurisdiction": "Russian Federation (public procurement)",
+        "country_code": "RU",
+        "statute": "Federal Law 44-FZ on the contract system in public procurement (Федеральный закон № 44-ФЗ)",
+        "statute_reference": "article 34 part 13.1; default interest under article 34 part 5",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "application_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 7,
+        "final_date_day_basis": "business",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "prescribed_rate",
+        "interest_reference_rate": (
+            "one three-hundredth of the Bank of Russia key rate (ключевая ставка) for each day of delay"
+        ),
+        "interest_margin_percent": None,
+        "interest_fixed_percent": None,
+        "interest_statute": "Federal Law 44-ФЗ, article 34 part 5",
+        "notes": (
+            "The clock for a payment owed by a state or municipal customer under the public procurement "
+            "contract system, which covers construction works alongside goods and services. Article 34 "
+            "part 13.1 gives the customer no more than seven working days from the date it signed the "
+            "acceptance document (документ о приемке) to pay, so enter that signature date as the "
+            "application date; following the convention used for the other single-date regimes, the "
+            "application date is taken as the due date and the seven working days as the final date for "
+            "payment. Working days, not calendar days, so the Russian holiday calendar has to be supplied "
+            "to reproduce the statutory date - and note that the Russian working year is moved about by "
+            "government decree each year, with weekends transferred to bridge holidays, which a fixed "
+            "weekday rule will not reproduce on its own. Two exceptions lengthen the period and this row "
+            "does not compute them: ten working days where the acceptance document was issued outside the "
+            "unified procurement information system, and ten working days where settlements under the "
+            "contract are subject to treasury support (казначейское сопровождение). State the final date "
+            "for payment on the application in either case rather than using the computed one. The period "
+            "was reduced from fifteen working days to seven by a 2022 amendment; the sources retrieved "
+            "disagree on whether the commencement was 1 January or 1 May 2022 and on whether it keys off "
+            "the date the procurement notice was posted, so that transition rule is not stated here as "
+            "settled. It does not affect a contract procured today, and it does affect an old contract, "
+            "so check the commencement before applying this row to one. There is no payment notice and no "
+            "pay-less notice in the law - the customer either signs the acceptance document or serves a "
+            "reasoned refusal of acceptance, and the payment clock does not start until it has signed - "
+            "so no_notice_effect is none. Late payment carries пеня under article 34 part 5 at one three-"
+            "hundredth of the Bank of Russia key rate on the unpaid sum for each day of delay. That is a "
+            "daily fraction of a floating reference rate, which is none of the shapes the four interest "
+            "bases were built for - an additive margin, a single prescribed source, or a flat annual rate "
+            "- so the mechanism is written into interest_reference_rate as text and the numeric fields are "
+            "left empty, the same accommodation in_msmed_2006 makes for its own compound multiplier. This "
+            "costs nothing while interest_description() only renders a sentence and nothing computes an "
+            "interest amount from these fields; it would cost real accuracy the day something does. No "
+            "private-sector row is shipped for Russia. The Civil Code chapter on works contracts makes "
+            "payment fall due on acceptance of the result (articles 711 and 746) and leaves the period "
+            "itself to the parties, so there is no statutory number of days to encode for a private "
+            "Russian construction contract; this is the same stance ng_ppa_2007 takes for Nigeria, and a "
+            "private clock should be added only if a statute is later found rather than by assuming this "
+            "public one reaches further than the customers that article 34 governs. Sourced from legal "
+            "practice commentary and procurement reference guides rather than from the text of 44-ФЗ "
+            "itself, which this module has not independently retrieved; a reader who needs the statute's "
+            "wording rather than its effect should go to article 34 before relying on these figures."
+        ),
+    },
+    # The two Chinese regimes below are one regulation read twice, because it
+    # sets two different periods for two different payers: thirty days for a
+    # government organ or public institution and sixty for a large enterprise,
+    # both owed to a small or medium-sized enterprise. A regime in this table is
+    # one clock, which is why VOB/B is split into an interim and a final entry
+    # and why the US rows are split public from private, so this is two entries
+    # rather than one entry with a footnote a calculation cannot read.
+    {
+        "code": "cn_sme_802_public",
+        "jurisdiction": "China (government and public institution buyers, SME payees)",
+        "country_code": "CN",
+        "statute": (
+            "Regulation on Guaranteeing Payments to Small and Medium-sized Enterprises "
+            "(保障中小企业款项支付条例), State Council Order No. 802"
+        ),
+        "statute_reference": "article 9 paragraph 1; acceptance under article 10; interest under article 17",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "application_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 30,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "fixed_rate",
+        "interest_reference_rate": "",
+        "interest_margin_percent": None,
+        "interest_fixed_percent": Decimal("18.250"),
+        "interest_statute": "保障中小企业款项支付条例, article 17",
+        "notes": (
+            "The clock for a payment owed by a government organ or a public institution (机关、事业单位) "
+            "to a small or medium-sized enterprise. Payee-size-scoped rather than construction-scoped, the "
+            "same shape as in_msmed_2006: the regulation reaches a buyer of goods, construction works or "
+            "services from an SME supplier and reaches nothing else, so it covers that slice of a "
+            "construction contract's parties rather than the contract as such. Construction works (工程) "
+            "are named in the operative text alongside goods and services, so this is not an analogy from "
+            "a goods statute. Article 9 sets thirty days from delivery; the contract may agree otherwise "
+            "but the period may not exceed sixty days, so state the agreed final date on the application "
+            "where a contract sets one. Calendar days: the text says 日, not 工作日. Where the clock "
+            "actually starts is article 10 rather than the bare delivery date - the period runs from the "
+            "date inspection or acceptance was passed (检验或者验收合格之日), and where the buyer lets the "
+            "inspection run over, from the date the agreed inspection period expired, so that a buyer "
+            "cannot postpone its own clock by sitting on the acceptance. For a construction progress "
+            "claim the relevant rule is the third paragraph of article 9: where the contract settles by "
+            "progress or on a periodic basis, the period runs from the date both parties confirmed the "
+            "settlement amount, and that confirmation date is what should be entered as the application "
+            "date. There is no payment notice and no pay-less notice in the regulation, so silence has no "
+            "preclusive effect and no_notice_effect is none. Article 17 gives the default interest as a "
+            "daily rate of 0.05 percent (每日利率万分之五) on late payment, written here as the 18.25 "
+            "percent a year it comes to, the same conversion us_tx_private_ch28 and us_ca_private_8800 "
+            "make from their monthly statutory rates. That figure is the default that applies when the "
+            "contract is silent; where the parties do agree a rate, article 17 requires it to be no lower "
+            "than the one-year loan prime rate published at the time the contract was concluded, which is "
+            "a floor on a floating rate and is not encoded in the numeric fields. This regulation was "
+            "revised by the State Council on 18 October 2024 and the revised text applies from 1 June "
+            "2025; the figures here are the revised ones and should not be applied to a dispute governed "
+            "by the earlier version. Sourced from the official published text of Order No. 802 and "
+            "cross-checked against a second official publication of the same articles; the module has not "
+            "obtained a certified translation, and a reader who needs the operative Chinese wording "
+            "rather than its effect should go to articles 9, 10 and 17."
+        ),
+    },
+    {
+        "code": "cn_sme_802_large",
+        "jurisdiction": "China (large enterprise buyers, SME payees)",
+        "country_code": "CN",
+        "statute": (
+            "Regulation on Guaranteeing Payments to Small and Medium-sized Enterprises "
+            "(保障中小企业款项支付条例), State Council Order No. 802"
+        ),
+        "statute_reference": "article 9 paragraph 2; acceptance under article 10; interest under article 17",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "application_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 60,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "fixed_rate",
+        "interest_reference_rate": "",
+        "interest_margin_percent": None,
+        "interest_fixed_percent": Decimal("18.250"),
+        "interest_statute": "保障中小企业款项支付条例, article 17",
+        "notes": (
+            "The clock for a payment owed by a large enterprise (大型企业) to a small or medium-sized "
+            "enterprise, the private-sector half of the same regulation. Sixty days from delivery under "
+            "the second paragraph of article 9, against thirty for a public buyer, which is why this is a "
+            "separate regime rather than a note on the public one. The contract may agree a different "
+            "period and here there is no numeric cap: the regulation instead requires the agreed period to "
+            "be reasonable by reference to industry norms and trading practice, and separately forbids "
+            "making payment to the SME conditional on the buyer having received payment from a third "
+            "party, or paying it pro rata as that third party pays - a statutory ban on pay-when-paid that "
+            "this clock does not model but which invalidates the contract term rather than the payment "
+            "obligation. Because the cap is a standard rather than a number, a contract period longer than "
+            "sixty days is not automatically void and is not automatically valid either, so where a "
+            "contract sets one, state the agreed final date on the application rather than relying on the "
+            "computed date. The acceptance rule in article 10 and the progress-settlement rule in the "
+            "third paragraph of article 9 apply identically to this regime; see cn_sme_802_public for how "
+            "they move the start of the clock, which is the paragraph a construction progress claim will "
+            "actually turn on. Interest, the 2024 revision and the 1 June 2025 commencement are likewise "
+            "the same as the public regime, and the sourcing caveat there applies here too."
+        ),
+    },
 )
 
 REGIME_CODES: tuple[str, ...] = tuple(regime["code"] for regime in PAYMENT_REGIMES)
+
+
+#: Country codes with a row of their own. Checked by _validate_no_regime_reasons
+#: and no_regime_reason(), both of which need "does this country have a row"
+#: answered without re-scanning PAYMENT_REGIMES on every call.
+_COUNTRIES_WITH_A_REGIME: frozenset[str] = frozenset(
+    r["country_code"] for r in PAYMENT_REGIMES if r.get("country_code")
+)
+
+
+def _validate_no_regime_reasons() -> None:
+    """Refuse a NO_REGIME_REASONS or NO_REGIME_HELD table that contradicts itself.
+
+    Called at import time, not deferred to seed_payment_regimes the way
+    tax_engine._validate_vat_absence is deferred to _load_table. That
+    precedent caution is about a table an operator can edit on disk without
+    running tests, where deferring means a malformed file fails the first
+    caller loudly instead of breaking import for everyone. Neither risk
+    applies to a dict literal in this module: it cannot reach a deployment
+    without passing ruff and the test suite first, and country_coverage.py
+    probe reads NO_REGIME_REASONS directly, never through the seeder, so
+    deferring the check there would leave that read path unvalidated. A
+    Python literal that fails this check is broken code and should fail
+    the same way a broken import does, immediately and for every caller.
+
+    Three refusals. Unlike tax_engine, no refusal for "declares nothing":
+    NO_REGIME_REASONS is opt-in for countries actually researched, not a
+    closed table every country must take a stance in, so silence is the
+    default for most of the world and is not an error.
+
+    * a declared value outside NO_REGIME_VALUES;
+    * a country_code that both has a row in PAYMENT_REGIMES and declares a
+      reason for having none, which is the same shape of contradiction
+      tax_engine._validate_vat_absence refuses, told about this table
+      instead of that one, and the same check applied to NO_REGIME_HELD: a
+      country with a row of its own cannot also be held;
+    * a country_code in both NO_REGIME_REASONS and NO_REGIME_HELD, which
+      would claim a country is simultaneously resolved and still being
+      researched.
+
+    Raises:
+        ValueError: on any of the three, naming the country code.
+    """
+    for code, reason in NO_REGIME_REASONS.items():
+        if reason not in NO_REGIME_VALUES:
+            raise ValueError(
+                f"country {code!r} declares a no-regime reason of {reason!r}, which is not one of "
+                f"{sorted(NO_REGIME_VALUES)}"
+            )
+    contradicts_a_row = (set(NO_REGIME_REASONS) | NO_REGIME_HELD) & _COUNTRIES_WITH_A_REGIME
+    if contradicts_a_row:
+        raise ValueError(
+            f"country code(s) {sorted(contradicts_a_row)} have a row in PAYMENT_REGIMES and also appear "
+            f"in NO_REGIME_REASONS or NO_REGIME_HELD; those keys describe an absent row"
+        )
+    both = set(NO_REGIME_REASONS) & NO_REGIME_HELD
+    if both:
+        raise ValueError(
+            f"country code(s) {sorted(both)} are in both NO_REGIME_REASONS and NO_REGIME_HELD; a country "
+            f"cannot be both resolved and held"
+        )
+
+
+_validate_no_regime_reasons()
 
 
 def regime_by_code(code: str) -> dict[str, Any] | None:
@@ -610,6 +1096,30 @@ def regime_by_code(code: str) -> dict[str, Any] | None:
         if regime["code"] == code:
             return dict(regime)
     return None
+
+
+def no_regime_reason(country_code: str) -> str | None:
+    """Why country_code has no row in PAYMENT_REGIMES, if that is known.
+
+    Returns one of NO_REGIME_NO_STATUTE, NO_REGIME_NOT_MODELLED or
+    NO_REGIME_DIFFERENT_SHAPE for a country researched to a
+    category-assignable degree with no row to show for it. Returns None for
+    a country simply unresolved, which includes most of the world and, for
+    now, every entry in NO_REGIME_HELD: a wrong-instrument search is not
+    evidence of absence and earns no value here rather than a guessed one.
+
+    Raises:
+        ValueError: country_code has a row of its own in PAYMENT_REGIMES, so
+            the question of why it has none does not apply. Mirrors
+            app.modules.property_dev.tax_engine.vat_absence refusal to
+            answer the same question about a jurisdiction that has a block.
+    """
+    code = (country_code or "").strip().upper()
+    if code in _COUNTRIES_WITH_A_REGIME:
+        raise ValueError(
+            f"country {code!r} has a row of its own in PAYMENT_REGIMES, so its absence is not something to explain"
+        )
+    return NO_REGIME_REASONS.get(code)
 
 
 async def seed_payment_regimes(session: AsyncSession, *, refresh: bool = False) -> dict[str, int]:
@@ -629,15 +1139,29 @@ async def seed_payment_regimes(session: AsyncSession, *, refresh: bool = False) 
     Returns:
         Counts under ``created``, ``updated`` and ``unchanged``.
     """
+    from pydantic import ValidationError
     from sqlalchemy import select
 
     from app.modules.payment_clock.models import PaymentRegime
+    from app.modules.payment_clock.schemas import RegimeSeedRow
 
     existing_rows = (await session.execute(select(PaymentRegime))).scalars().all()
     existing = {row.code: row for row in existing_rows}
 
     created = updated = unchanged = 0
     for entry in PAYMENT_REGIMES:
+        # Validated here, not only at the API boundary. seed_payment_regimes is
+        # the path our own shipped catalogue takes into the table, and until
+        # this line it took PaymentRegime(**entry) straight from the dict,
+        # unchecked by the Literal vocabulary the API rejects submitted data
+        # on. A bad value here would have seeded silently and only surfaced
+        # downstream, in whichever rule happened to read it.
+        try:
+            RegimeSeedRow(**entry)
+        except ValidationError as exc:
+            raise ValueError(
+                f"payment regime {entry.get('code')!r} failed schema validation and was not seeded: {exc}"
+            ) from exc
         row = existing.get(entry["code"])
         if row is None:
             session.add(PaymentRegime(**entry))
@@ -661,8 +1185,15 @@ async def seed_payment_regimes(session: AsyncSession, *, refresh: bool = False) 
 
 
 __all__ = [
+    "NO_REGIME_DIFFERENT_SHAPE",
+    "NO_REGIME_HELD",
+    "NO_REGIME_NOT_MODELLED",
+    "NO_REGIME_NO_STATUTE",
+    "NO_REGIME_REASONS",
+    "NO_REGIME_VALUES",
     "PAYMENT_REGIMES",
     "REGIME_CODES",
+    "no_regime_reason",
     "regime_by_code",
     "seed_payment_regimes",
 ]

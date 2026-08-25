@@ -38,6 +38,34 @@ interface ChangelogEntry {
 // date, title and meaning intact; trim the prose, not the facts.
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '15.8.0',
+    date: '2026-08-25',
+    tag: 'NEW',
+    summary:
+      'A workspace with no cost database now opens on an invitation that names two ways to begin instead of an empty screen, and the same invitation sits on the dashboard until a database exists. The case block on the dashboard draws twenty three readable cases instead of ten unreadable ones, sized from its own width rather than the screen\'s, and it can be shrunk, grown or put away; the case library now leads with the market the reader\'s language speaks for while still showing every case, because the hundred and forty that belong to no single market are the product rather than a backlog. Three defects that could not be seen from inside the language they were wrong in: a list of names was joined with a Latin comma inside a sentence translated into forty two languages, so the sentence was localized and its punctuation was not; the Bulgarian cost screen has been offering a bone database since 11.1.0 and inviting the reader to add their first degree; and the same case wore different faces on the dashboard and on the hub because one of them was choosing from a window instead of the whole catalogue. Uzbek, fifty times further behind than any other language, closes two thirds of its gap.',
+  },
+  {
+    version: '15.7.0',
+    date: '2026-08-25',
+    tag: 'NEW',
+    summary:
+      'The case library goes from 164 walkthroughs to 202, and the four markets it was quietest about are the ones that grew: Canada and China had none at all, Spain and Britain had one each, and each of the four now has ten. Canada and China were not researched for this release, they had complete case specifications written months ago that never reached the product while Germany and the United States had the same treatment and theirs did arrive, which is the whole reason a German reader found thirteen cases and a Canadian reader found none. What the new cases refuse to claim is the part worth reading: each was checked against what the product actually does before a step promised it, and one of those narrowings found a defect in the product rather than in the case. A change recorded against a Canadian contract was being given a twenty eight day countdown to a legal deadline no contract text supports, manufactured by a generic fallback for a contract family the registry did not recognise; that family is now held rather than answered, so the clock returns no period and a status of unknown instead of a number nobody wrote. A case also now says who it is written for and where it will take you, on the card and on the case page, where the company types are controls that filter the catalogue to that kind of firm. A project finds its own country rules through the ISO code it already carries rather than by matching two letter tokens inside a free text region name, which had been giving Mexico City and Ile de France the German pack from a preposition and Russia, Belarus, Cyprus and Australia the American one from the letters in their own names. The Gulf weekend falls on the days the Gulf actually rests, Kuwait, Bahrain and Oman have calendars at all, and the Emirates has its own rather than sharing one named after a region with no single working week. Russia and China get the statutory payment periods they were owed, and the empty state of the step palette is no longer English in ten languages, which survived because both coverage scanners assumed every value opens with a double quote and silently swallowed twenty five keys after the one that did not.',
+  },
+  {
+    version: '15.6.1',
+    date: '2026-08-25',
+    tag: 'FIX',
+    summary:
+      'A stocktake, a stock reservation or a goods receipt no longer answers with a server error. The defect had two halves: the response declared the unit cost mandatory, when a movement out of a balance with no knowable average has no cost to record, which is what a fresh install hits; and on an upgraded database the two cost columns were still mandatory in the schema, because the repair pass that runs on startup could only add columns and never relax one. Both are closed, and that repair pass can now widen a column, which is the one alteration data already in the table can never refuse. A database from before 15.4.0 records no migration revision at all, and rather than being stamped at a position nothing verified, which destroyed the only durable evidence it was behind, it is now left unstamped and says so on the health endpoint. The check that compares an upgraded schema against the models looks in both directions instead of one, and asks each kind of database the question it can actually answer. Awarding a tender package records which submission won, reaches the people the notification is meant for, and settles the currency once. A request for a file that is not there answers not found, rather than the application page with a success status. A subscriber that fails while handling an event is reported with its traceback instead of being recorded at a level nothing prints.',
+  },
+  {
+    version: '15.6.0',
+    date: '2026-08-24',
+    tag: 'FIX',
+    summary:
+      'Every document this product generates can now draw Chinese. The typeface was chosen by guessing from the characters in the string, and a table cell that named no face fell back to one with no Chinese glyphs at all, so a Chinese name came out as empty boxes or did not come out; the face is now chosen by asking the font whether it can draw the text. Names reach a document as text rather than as markup, so an ampersand in a company name no longer appears as an escape or takes the rest of the cell with it, and a document says which language it was written in rather than the language of whoever downloaded it. Working calendars are the calendars of the countries they name: Canada was using American holidays, Saudi Arabia was shipping a four day week, the Gulf states shared one holiday set, and the Chinese calendar held the lunisolar festivals of the previous year. A stock cost that averaged two currencies into one number now carries the currency it is in or withholds the number, and the three way match refuses an invoice it cannot compare against its order instead of subtracting one currency from another. An upgraded database now keeps the constraints the model declares, which a repair pass had been leaving off whenever it could not find a value to fill the existing rows with. Payment clocks for Ontario, India, Bulgaria and Nigeria, bill column presets for China and Canada, and a public demo that can be left running: it refuses a websocket it has not allowlisted and can forget the files strangers upload to it.',
+  },
+  {
     version: '15.5.0',
     date: '2026-08-23',
     tag: 'FIX',

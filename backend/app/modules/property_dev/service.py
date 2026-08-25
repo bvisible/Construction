@@ -9,6 +9,7 @@ session + repositories.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 import uuid
@@ -22,7 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.events import event_bus, publish_after_commit
 from app.core.i18n import get_locale
 from app.core.json_merge import merge_metadata
-from app.core.pdf_fonts import BODY_FONT, BOLD_FONT, register_pdf_fonts
+from app.core.pdf_fonts import (
+    BODY_FONT,
+    BOLD_FONT,
+    pdf_font_for_text,
+    pdf_style_for_text,
+    pdf_table_font_commands,
+    register_pdf_fonts,
+)
 from app.core.storage import find_existing_upload
 from app.core.validation.messages import translate
 from app.modules.property_dev.models import (
@@ -2890,7 +2898,13 @@ class PropertyDevService:
         plot_status_before = plot.status
         plot_development_id_snap = plot.development_id
         plot_number_snap = plot.plot_number
-        if plot_status_before in {"sold", "handed_over"}:
+        # "reserved" is intentionally included, matching create_reservation()
+        # (see its own comment): a plot that is already reserved must not
+        # accept a second reservation through this route either. This guard
+        # used to admit "reserved", so a plot held by one lead could be
+        # silently re-reserved for another - the exact double-booking race
+        # create_reservation() was fixed to block, just missed here.
+        if plot_status_before in {"reserved", "sold", "handed_over"}:
             raise HTTPException(
                 status_code=409,
                 detail=f"Plot {plot_number_snap} not available for reservation",
@@ -3184,7 +3198,6 @@ class PropertyDevService:
         # would force a lazy-load on subsequent attribute access (trips
         # MissingGreenlet under aiosqlite).
         plot_id_snap = plot.id
-        plot_status_before = plot.status
         res_tenant_id_snap = res.tenant_id
         res_buyer_id_snap = res.buyer_id
 
@@ -3241,8 +3254,13 @@ class PropertyDevService:
                 # exists and the user can add the party manually via
                 # the contract-parties endpoint.
                 pass
-        if plot_status_before == "reserved":
-            await self.plots.update_fields(plot_id_snap, status="sold")
+        # The plot stays "reserved" here rather than flipping to "sold":
+        # a draft SPA is not a completed sale, and "sold" is a one-way
+        # terminal state in _PLOT_TRANSITIONS (no path back to "reserved"
+        # or "planned"). Flipping this early meant a plot whose SPA later
+        # fell through stayed sold forever, with no active contract left
+        # to explain why - see sign_spa() for the "sold" transition and
+        # cancel_spa() for the release.
 
         # Default payment schedule (single milestone @ spa_signed).
         await self._create_default_payment_schedule(spa)
@@ -3413,8 +3431,19 @@ class PropertyDevService:
         await self.sales_contracts.update_fields(spa_id, **fields)
         signed = await self.get_spa(spa_id)
 
-        # Auto-activate the linked payment schedule on countersign.
+        # Countersignature is the point the sale actually completes: the
+        # plot moves to "sold" here rather than at draft creation, so a
+        # draft or sent-for-signature SPA that later falls through can
+        # still release the plot back to inventory (see cancel_spa()).
+        # Gated on plot status, not on how the SPA was created: only a
+        # plot currently "reserved" is flipped. A plot still "planned" or
+        # "ready" (e.g. a SPA drafted directly via create_spa(), which
+        # does not touch plot status) is left alone here - "planned" has
+        # no direct edge to "sold" in _PLOT_TRANSITIONS anyway.
         if target == "countersigned":
+            plot = await self.plots.get_by_id(signed.plot_id)
+            if plot is not None and plot.status == "reserved":
+                await self.plots.update_fields(plot.id, status="sold")
             schedule = await self.payment_schedules.get_for_contract(spa_id)
             if schedule is not None and schedule.status == "active":
                 # Schedule already active → fire spa_signed milestone.
@@ -3435,11 +3464,24 @@ class PropertyDevService:
     async def cancel_spa(self, spa_id: uuid.UUID) -> SalesContract:
         spa = await self.get_spa(spa_id)
         _ensure_transition("spa", spa.status, "cancelled", allowed_spa_transitions)
+        plot_id_snap = spa.plot_id
         await self.sales_contracts.update_fields(spa_id, status="cancelled")
         # Suspend the schedule.
         schedule = await self.payment_schedules.get_for_contract(spa_id)
         if schedule is not None and schedule.status == "active":
             await self.payment_schedules.update_fields(schedule.id, status="cancelled")
+        # Release the plot the sale was holding, mirroring
+        # cancel_reservation(). Only "reserved" is reversed here - a plot
+        # that already reached "sold" (the SPA was countersigned before
+        # being cancelled) has typically moved further into construction,
+        # and _PLOT_TRANSITIONS treats "sold" as one-way by design
+        # (compare the buyer-cancellation path above, which releases a
+        # sold plot to "ready" rather than "planned"). Reversing an
+        # already-countersigned SPA's plot is a separate, larger decision
+        # this fix does not make.
+        plot = await self.plots.get_by_id(plot_id_snap)
+        if plot is not None and plot.status == "reserved":
+            await self.plots.update_fields(plot.id, status="planned")
         event_bus.publish_detached(
             "property_dev.spa.cancelled",
             data={"spa_id": str(spa_id)},
@@ -3936,9 +3978,29 @@ class PropertyDevService:
                 status_code=409,
                 detail=f"Instalment in status '{ins.status}' - no demand",
             )
-        # Mark overdue if past due_date.
+        # Snapshot every field the event payload below needs before any
+        # update_fields() call in this function can expire this row - a
+        # read off ``ins`` afterwards trips MissingGreenlet under
+        # aiosqlite/asyncpg (same idiom fixed in waive_instalment()).
+        schedule_id_snap = ins.schedule_id
+        amount_snap = ins.amount
+        amount_paid_snap = ins.amount_paid
+        due_date_snap = ins.due_date
+        milestone_label_snap = ins.milestone_label
+        # Mark overdue if past due_date - but only once a milestone has
+        # actually made it due. "pending" means the construction milestone
+        # that creates the obligation hasn't fired yet (see
+        # _fire_milestone()'s docstring), so the due_date sitting on a
+        # pending row is a forecast derived from the signing date, not an
+        # operative one. The buyer doesn't owe this yet, and "overdue" is
+        # a statement with real consequences - interest, penalties, in
+        # some contracts grounds for rescission - so this deliberately
+        # does not fire for "pending". A pending instalment past its
+        # forecast date is still a real signal, just not this one: it
+        # says the project is behind, which is a schedule surface, not a
+        # payment one, and is not raised here.
         today = datetime.now(UTC).date().isoformat()
-        if ins.due_date and ins.due_date < today and ins.status in {"pending", "due"}:
+        if ins.due_date and ins.due_date < today and ins.status == "due":
             _ensure_transition(
                 "instalment",
                 ins.status,
@@ -3952,10 +4014,10 @@ class PropertyDevService:
             data={
                 "template": "INSTALMENT_DEMAND",
                 "instalment_id": str(ins_id),
-                "schedule_id": str(ins.schedule_id),
-                "amount_outstanding": str(Decimal(str(ins.amount or 0)) - Decimal(str(ins.amount_paid or 0))),
-                "due_date": ins.due_date,
-                "milestone_label": ins.milestone_label,
+                "schedule_id": str(schedule_id_snap),
+                "amount_outstanding": str(Decimal(str(amount_snap or 0)) - Decimal(str(amount_paid_snap or 0))),
+                "due_date": due_date_snap,
+                "milestone_label": milestone_label_snap,
             },
             source_module="property_dev",
         )
@@ -3972,13 +4034,17 @@ class PropertyDevService:
         md = dict(ins.metadata_ or {})
         md["waiver_reason"] = data.reason
         md["waived_at"] = datetime.now(UTC).isoformat()
+        # Snapshot before update_fields() expires this row's ORM identity-map
+        # entry - a read off ``ins`` afterwards trips MissingGreenlet under
+        # aiosqlite/asyncpg (same idiom as sign_spa()/cancel_spa()).
+        schedule_id_snap = ins.schedule_id
         await self.instalments.update_fields(ins_id, status="waived", metadata_=md)
-        await self._maybe_complete_schedule(ins.schedule_id)
+        await self._maybe_complete_schedule(schedule_id_snap)
         event_bus.publish_detached(
             "property_dev.instalment.waived",
             data={
                 "instalment_id": str(ins_id),
-                "schedule_id": str(ins.schedule_id),
+                "schedule_id": str(schedule_id_snap),
                 "reason": data.reason,
             },
             source_module="property_dev",
@@ -5910,6 +5976,16 @@ async def _svc_update_block(
 # ── Regulator reports (RERA / MAHARERA / 214-ФЗ) ──────────────────────
 
 
+def _esc(value: object) -> str:
+    """Escape a value for interpolation into reportlab paragraph markup.
+
+    A paragraph takes a small HTML-like markup, so a raw development or
+    regulator name is parsed rather than printed and the document is altered
+    without anything raising.
+    """
+    return html.escape(str(value))
+
+
 def _render_regulator_pdf(
     *,
     regulator: str,
@@ -5956,22 +6032,26 @@ def _render_regulator_pdf(
     styles["Normal"].fontName = BODY_FONT
     styles["Italic"].fontName = BODY_FONT
     story = [
+        # Every value below is interpolated into paragraph markup, so it is
+        # escaped first. The face names are our own output and stay literal:
+        # the one in the font attribute would break the tag if escaped.
         Paragraph(
-            f"<b>{regulator} - Quarterly Disclosure ({quarter})</b>",
-            styles["Title"],
+            f"<b>{_esc(regulator)} - Quarterly Disclosure ({_esc(quarter)})</b>",
+            pdf_style_for_text(styles["Title"], f"{regulator}{quarter}"),
         ),
         Spacer(1, 0.6 * cm),
         Paragraph(
-            f"<b>Development:</b> {development_name} (<font face='{BODY_FONT}'>{development_code}</font>)",
-            styles["Normal"],
+            f"<b>Development:</b> {_esc(development_name)} "
+            f"(<font face='{pdf_font_for_text(development_code)}'>{_esc(development_code)}</font>)",
+            pdf_style_for_text(styles["Normal"], f"{development_name}{development_code}"),
         ),
         Paragraph(
-            f"<b>Reporting period:</b> {quarter}",
-            styles["Normal"],
+            f"<b>Reporting period:</b> {_esc(quarter)}",
+            pdf_style_for_text(styles["Normal"], quarter),
         ),
         Paragraph(
-            f"<b>Currency:</b> {summary.get('currency', '-')}",
-            styles["Normal"],
+            f"<b>Currency:</b> {_esc(summary.get('currency', '-'))}",
+            pdf_style_for_text(styles["Normal"], str(summary.get("currency", "-"))),
         ),
         Spacer(1, 0.4 * cm),
     ]
@@ -5990,6 +6070,10 @@ def _render_regulator_pdf(
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 6),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                # Bare-string cells: the summary keys and their values, which
+                # carry development and unit names. Only the header row names a
+                # face, so the body is Helvetica and has to be measured there.
+                *pdf_table_font_commands(rows, base="Helvetica", header_rows=1, header_base=BOLD_FONT),
             ]
         )
     )

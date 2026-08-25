@@ -920,7 +920,20 @@ def _build_minimal_pdf(text: str) -> bytes:
     # Trailer
     parts.append(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF")
 
-    return "\n".join(parts).encode("latin-1")
+    # Courier is a Type1 base font covering Latin-1 only, and this document is a
+    # single-byte stream, so anything outside Latin-1 in a punch item (a Cyrillic
+    # title, a CJK assignee name, a Polish stroke) has to be substituted rather
+    # than crash the export with a UnicodeEncodeError -> HTTP 500. errors="replace"
+    # emits one '?' byte per unencodable character, which keeps every character one
+    # byte so the /Length written above stays correct.
+    #
+    # This writer is a near-duplicate of the field report one in
+    # app/modules/fieldreports/service.py, which has carried this argument and this
+    # reason from the start. The duplication is known and is deliberately not
+    # resolved here: the shared writer belongs in core rather than in either module,
+    # because a module importing another module's service would make punch list
+    # export stop working depending on which other modules happen to be installed.
+    return "\n".join(parts).encode("latin-1", "replace")
 
 
 def _render_punchlist_text(
@@ -1014,7 +1027,13 @@ def _build_reportlab_pdf(
         TableStyle,
     )
 
-    from app.core.pdf_fonts import BODY_FONT, BOLD_FONT, register_pdf_fonts
+    from app.core.pdf_fonts import (
+        BODY_FONT,
+        BOLD_FONT,
+        pdf_style_for_text,
+        pdf_table_font_commands,
+        register_pdf_fonts,
+    )
 
     register_pdf_fonts()
 
@@ -1074,7 +1093,7 @@ def _build_reportlab_pdf(
         heading = f"#{idx} - {item.title}"
         if code:
             heading = f"#{idx} · {code} - {item.title}"
-        story.append(Paragraph(heading, h2))
+        story.append(Paragraph(heading, pdf_style_for_text(h2, heading)))
 
         meta_rows = [
             ["Status", item.status or "-", "Priority", item.priority or "-"],
@@ -1108,6 +1127,12 @@ def _build_reportlab_pdf(
                         (-1, -1),
                         [colors.white, colors.HexColor("#f6f7f9")],
                     ),
+                    # These cells are bare strings, so the two FONT commands
+                    # above decide their face and no per-paragraph choice can
+                    # reach them. The assignee, the category and the trade are
+                    # user data and are Chinese on a Chinese site; these
+                    # commands come last so they win for exactly those cells.
+                    *pdf_table_font_commands(meta_rows),
                 ]
             )
         )
@@ -1115,7 +1140,8 @@ def _build_reportlab_pdf(
         story.append(Spacer(1, 2 * mm))
 
         if item.description:
-            story.append(Paragraph(item.description[:1000], body))
+            description = item.description[:1000]
+            story.append(Paragraph(description, pdf_style_for_text(body, description)))
 
         # Sheet-pin caption (sheet-pin style).
         sheet_ref = getattr(item, "document_id", None) or (item.metadata_ or {}).get("sheet_id")
@@ -1150,7 +1176,8 @@ def _build_reportlab_pdf(
 
         if item.resolution_notes:
             story.append(Spacer(1, 1 * mm))
-            story.append(Paragraph(f"<b>Resolution:</b> {item.resolution_notes[:500]}", small))
+            notes = item.resolution_notes[:500]
+            story.append(Paragraph(f"<b>Resolution:</b> {notes}", pdf_style_for_text(small, notes)))
 
         # Reopen-history chronology (defensive: schema may not yet be migrated).
         history = list(getattr(item, "reopen_history", None) or [])
@@ -1163,7 +1190,7 @@ def _build_reportlab_pdf(
                 story.append(
                     Paragraph(
                         f"&#8634; reopened from <b>{prev}</b> by {by} at {ts}",
-                        small,
+                        pdf_style_for_text(small, f"{prev}{by}"),
                     )
                 )
 
