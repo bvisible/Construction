@@ -17,6 +17,10 @@ import logging
 import math
 import uuid
 from datetime import UTC, date, datetime, timedelta
+#//// Neoffice — Decimal + Any for _evm_cost, which turns a BOQ position's
+#//// String total into an activity's planned cost.
+from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -636,6 +640,29 @@ def _effective_activity_status(
 
     return stored_status
 
+
+
+def _evm_cost(total: Any) -> Decimal | None:
+    """A BOQ position's value, ready to be an activity's planned cost.
+
+    ``Position.total`` is a String column upstream, not Numeric: it holds "",
+    "0", "71250.00", and occasionally something that is none of those. A blank
+    or unparseable total means "no budget known", which is None — not zero.
+    Zero would tell earned value that the work is free, and free work has a
+    cost performance index of infinity.
+    """
+    if total is None:
+        return None
+    if isinstance(total, Decimal):
+        return total if total != 0 else None
+    text = str(total).strip().replace("'", "").replace(" ", "")
+    if not text:
+        return None
+    try:
+        value = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    return value if value != 0 else None
 
 class ScheduleService:
     """Business logic for Schedule, Activity, and WorkOrder operations."""
@@ -2339,6 +2366,13 @@ class ScheduleService:
                 end_date=section_start.isoformat(),  # placeholder
                 duration_days=0,  # placeholder - computed from children
                 progress_pct="0",
+                #//// Neoffice — a summary deliberately carries NO cost_planned.
+                #//// evm-summary feeds on list_activities_for_schedule, which
+                #//// returns summaries and tasks alike without filtering on
+                #//// activity_type. Costing both levels would count the section
+                #//// once in its own row and again across its children, and
+                #//// double a budget in a way nothing on screen would reveal.
+                #//// The value lives on the leaves, where the position is.
                 status="not_started",
                 activity_type="summary",
                 dependencies=[],
@@ -2431,6 +2465,14 @@ class ScheduleService:
                     end_date=child_end.isoformat(),
                     duration_days=duration_cal,
                     progress_pct="0",
+                    #//// Neoffice — carry the position's value onto the activity.
+                    #//// Upstream generates the whole schedule from the bill —
+                    #//// durations, dependencies, milestones — and leaves
+                    #//// cost_planned null. Earned value then has no budget to
+                    #//// work from: evm-summary answers 200 with every figure
+                    #//// zero, and the EVM tab looks broken when it is merely
+                    #//// starved. The number is already in hand here.
+                    cost_planned=_evm_cost(child_pos.get("total")),
                     status="not_started",
                     activity_type="task",
                     dependencies=child_deps,
