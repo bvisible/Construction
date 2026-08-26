@@ -6,10 +6,11 @@ Pydantic schemas for the Neoffice extensions module — RoomPlan import/export.
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 class RoomPlanImportRequest(BaseModel):
@@ -254,3 +255,120 @@ class ElementMetreRequest(BaseModel):
     page: int = Field(1, ge=1, description="1-based page number")
     scale_ratio: float | None = Field(None, description="Drawing scale denominator, e.g. 50")
     storey_height_m: float = Field(2.70, gt=0, description="Storey height for wall m² (assumption)")
+
+
+# ── Site measurements ────────────────────────────────────────────────────────
+# The quantity actually built, against the position that priced it.
+
+
+class SiteMeasurementCreate(BaseModel):
+    """Body for POST /api/v1/neoffice/site-measurements/.
+
+    ``measured_quantity`` has **no upper bound** on purpose: a remeasured
+    contract bills what was built, and 52 m2 poured against 50 priced is a fact
+    to record, not an error to reject. Negative is refused — a credit is a
+    separate measurement, not a negative one.
+    """
+
+    boq_position_id: str = Field(..., description="The priced position being measured")
+    measured_quantity: Decimal = Field(..., ge=0, description="Quantity built, in the position's unit")
+    unit: str = Field("", max_length=20, description="Copied from the position if left empty")
+    location: str = Field("", max_length=500, description='Where on site, e.g. "Niveau 0, axe A-B"')
+    notes: str = Field("", max_length=10000)
+    photos: list[str] = Field(default_factory=list)
+    measured_at: str | None = Field(None, max_length=40, description="ISO date; now if omitted")
+    measured_by: str | None = Field(None, max_length=36)
+
+    @field_serializer("measured_quantity", when_used="json")
+    def _ser_qty(self, v: Decimal) -> str:
+        return str(v)
+
+
+class SiteMeasurementUpdate(BaseModel):
+    """Body for PATCH. Refused once the measurement is agreed — see the router."""
+
+    measured_quantity: Decimal | None = Field(None, ge=0)
+    unit: str | None = Field(None, max_length=20)
+    location: str | None = Field(None, max_length=500)
+    notes: str | None = Field(None, max_length=10000)
+    photos: list[str] | None = None
+    measured_at: str | None = Field(None, max_length=40)
+
+
+class SiteMeasurementAgree(BaseModel):
+    """Body for POST /{id}/agree — the contradictory half."""
+
+    agreed_by: str | None = Field(None, max_length=36)
+    signature_ref: str = Field("", max_length=255, description="Reference to the captured signature")
+
+
+class SiteMeasurementResponse(BaseModel):
+    """One measurement as the API returns it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    boq_position_id: str
+    project_id: str | None = None
+    measured_quantity: Decimal
+    unit: str
+    location: str
+    notes: str
+    photos: list[str]
+    measured_at: str | None
+    measured_by: str | None
+    agreed_at: str | None
+    agreed_by: str | None
+    signature_ref: str
+    status: str
+    invoiced_at: str | None
+    invoice_ref: str
+
+    @field_serializer("measured_quantity", when_used="json")
+    def _ser_qty(self, v: Decimal) -> str:
+        return str(v)
+
+
+class PositionVarianceRow(BaseModel):
+    """One line of the priced-vs-built comparison.
+
+    ``variance`` is built minus priced: negative is an under-run (49 against
+    50), positive an over-run (52 against 50). ``amount`` is what the built
+    quantity is worth at the position's own unit rate — the figure that goes on
+    the invoice, which is why it is not derived from the priced total.
+    """
+
+    boq_position_id: str
+    ordinal: str
+    description: str
+    unit: str
+    priced_quantity: Decimal
+    measured_quantity: Decimal
+    variance: Decimal
+    variance_percent: float | None
+    status: str
+    unit_rate: Decimal
+    amount: Decimal
+    measurement_count: int
+    agreed_count: int
+
+    @field_serializer("priced_quantity", "measured_quantity", "variance", "unit_rate",
+                      "amount", when_used="json")
+    def _ser_dec(self, v: Decimal) -> str:
+        return str(v)
+
+
+class PositionVarianceReport(BaseModel):
+    """The comparison for a whole bill, plus its totals."""
+
+    boq_id: str
+    rows: list[PositionVarianceRow]
+    priced_total: Decimal
+    measured_total: Decimal
+    variance_total: Decimal
+    positions_measured: int
+    positions_total: int
+
+    @field_serializer("priced_total", "measured_total", "variance_total", when_used="json")
+    def _ser_tot(self, v: Decimal) -> str:
+        return str(v)

@@ -16,7 +16,7 @@ import hmac
 import logging
 import os
 import uuid
-from decimal import Decimal  #//// Neoffice — price band on the resource pass
+from decimal import Decimal, InvalidOperation  #//// Neoffice — price band on the resource pass; InvalidOperation guards the String money columns
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,9 @@ from app.modules.neoffice.schemas import (
     RoomDetectionResponse,
     RoomPlanImportRequest,
     ScheduleProgressBridgeRequest,
+    SiteMeasurementAgree,
+    SiteMeasurementCreate,
+    SiteMeasurementUpdate,
 )
 from app.modules.schedule.models import WorkOrder
 from app.modules.schedule.service_4d import ScheduleProgressService
@@ -2084,3 +2087,347 @@ async def insert_text_position_into_boq(
         # //// END NEOFFICE PATCH
     }
 # //// END NEOFFICE PATCH
+
+
+# ── Site measurements ────────────────────────────────────────────────────────
+# What the site actually built, against the position that priced it. See the
+# class note in models.py for why this does not reuse upstream's
+# oe_variations_site_measurement.
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+async def _measurement_or_404(session: Any, measurement_id: str) -> Any:
+    from app.modules.neoffice.models import SiteMeasurement
+
+    row = await session.get(SiteMeasurement, uuid.UUID(str(measurement_id)))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Measurement not found")
+    return row
+
+
+@router.get("/site-measurements/")
+async def list_site_measurements(
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+    boq_position_id: str | None = None,
+    project_id: str | None = None,
+    status_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Measurements for one position, or for a whole project.
+
+    Ordered oldest first: a position is measured several times as the work
+    advances, and the story reads forwards.
+    """
+    from sqlalchemy import select
+
+    from app.modules.neoffice.models import SiteMeasurement
+
+    stmt = select(SiteMeasurement)
+    if boq_position_id:
+        stmt = stmt.where(SiteMeasurement.boq_position_id == uuid.UUID(boq_position_id))
+    if project_id:
+        stmt = stmt.where(SiteMeasurement.project_id == uuid.UUID(project_id))
+    if status_filter:
+        stmt = stmt.where(SiteMeasurement.status == status_filter)
+    stmt = stmt.order_by(SiteMeasurement.measured_at.asc().nulls_last(),
+                         SiteMeasurement.created_at.asc())
+
+    rows = (await session.execute(stmt)).scalars().all()
+    return [_measurement_dict(r) for r in rows]
+
+
+def _measurement_dict(row: Any) -> dict[str, Any]:
+    """Serialise one measurement. Decimals as strings — never floats."""
+    return {
+        "id": str(row.id),
+        "boq_position_id": str(row.boq_position_id),
+        "project_id": str(row.project_id) if row.project_id else None,
+        "measured_quantity": str(row.measured_quantity),
+        "unit": row.unit,
+        "location": row.location,
+        "notes": row.notes,
+        "photos": row.photos or [],
+        "measured_at": row.measured_at,
+        "measured_by": row.measured_by,
+        "agreed_at": row.agreed_at,
+        "agreed_by": row.agreed_by,
+        "signature_ref": row.signature_ref,
+        "status": row.status,
+        "invoiced_at": row.invoiced_at,
+        "invoice_ref": row.invoice_ref,
+    }
+
+
+@router.post("/site-measurements/", status_code=status.HTTP_201_CREATED)
+async def create_site_measurement(
+    request: SiteMeasurementCreate,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Record a quantity measured on site against a priced position.
+
+    The unit and the project are copied from the position when the caller does
+    not give them: the phone that records "49" should not have to know either,
+    and a unit copied now cannot be reinterpreted by a later edit of the
+    estimate.
+    """
+    from app.modules.boq.models import BOQ, Position as BOQPosition
+    from app.modules.neoffice.models import SiteMeasurement
+
+    position = await session.get(BOQPosition, uuid.UUID(request.boq_position_id))
+    if position is None:
+        raise HTTPException(status_code=404, detail="BOQ position not found")
+
+    project_id = None
+    boq = await session.get(BOQ, position.boq_id) if position.boq_id else None
+    if boq is not None:
+        project_id = boq.project_id
+
+    row = SiteMeasurement(
+        boq_position_id=position.id,
+        project_id=project_id,
+        measured_quantity=request.measured_quantity,
+        unit=request.unit or (position.unit or ""),
+        location=request.location,
+        notes=request.notes,
+        photos=list(request.photos or []),
+        measured_at=request.measured_at or _now_iso(),
+        measured_by=request.measured_by or str(user_id) if user_id else None,
+        status="draft",
+    )
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    return _measurement_dict(row)
+
+
+@router.patch("/site-measurements/{measurement_id}")
+async def update_site_measurement(
+    measurement_id: str,
+    request: SiteMeasurementUpdate,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Correct a measurement that has not been agreed yet.
+
+    Refused once agreed: it has been signed, and an invoice may already rest on
+    it. The correction of a signed measurement is a new measurement — the way
+    an accountant corrects, by writing another line rather than erasing one.
+    """
+    row = await _measurement_or_404(session, measurement_id)
+    if row.status != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "measurement_locked",
+                "status": row.status,
+                "message": (
+                    "An agreed measurement cannot be edited. Record a new "
+                    "measurement instead."
+                ),
+            },
+        )
+
+    for field, value in request.model_dump(exclude_unset=True).items():
+        if value is not None:
+            setattr(row, field, value)
+    await session.commit()
+    await session.refresh(row)
+    return _measurement_dict(row)
+
+
+@router.post("/site-measurements/{measurement_id}/agree")
+async def agree_site_measurement(
+    measurement_id: str,
+    request: SiteMeasurementAgree,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """The contradictory half: the quantity is agreed and becomes billable.
+
+    Idempotent — agreeing twice keeps the first agreement. The date of an
+    agreement is evidence, and evidence does not get rewritten by a second tap
+    on a phone.
+    """
+    row = await _measurement_or_404(session, measurement_id)
+    if row.agreed_at:
+        return _measurement_dict(row)
+
+    row.agreed_at = _now_iso()
+    row.agreed_by = request.agreed_by or (str(user_id) if user_id else None)
+    row.signature_ref = request.signature_ref or row.signature_ref
+    row.status = "agreed"
+    await session.commit()
+    await session.refresh(row)
+    return _measurement_dict(row)
+
+
+@router.delete("/site-measurements/{measurement_id}", status_code=204)
+async def delete_site_measurement(
+    measurement_id: str,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> None:
+    """Delete a draft measurement. An agreed one is kept, like any signed record."""
+    row = await _measurement_or_404(session, measurement_id)
+    if row.status != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "measurement_locked", "status": row.status},
+        )
+    await session.delete(row)
+    await session.commit()
+
+
+def _dec(value: Any) -> Decimal:
+    """Coerce a BOQ money/quantity column to Decimal.
+
+    ``BOQPosition.quantity``, ``.unit_rate`` and ``.total`` are String columns
+    upstream, not Numeric. They hold "", "0", "12.5", and occasionally a
+    localised or plainly broken value. Comparing or summing them as text is the
+    trap that once made a price band read "9" as greater than "42"; every read
+    goes through here.
+    """
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value
+    text = str(value).strip().replace(" ", "").replace("'", "").replace(" ", "")
+    if not text:
+        return Decimal("0")
+    try:
+        return Decimal(text)
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+@router.get("/site-measurements/variance/")
+async def position_variance_report(
+    session: SessionDep,
+    boq_id: str,
+    user_id: str = Depends(get_current_user_id),
+    agreed_only: bool = True,
+) -> dict[str, Any]:
+    """Priced against built, position by position.
+
+    This is the screen an estimator asks for: what each position priced, what
+    the site measured, the gap, and what the measured quantity is worth.
+
+    ``amount`` is the built quantity at the position's own unit rate, not a
+    share of the priced total. In a remeasured contract those two differ the
+    moment the quantity does, and it is the first one that goes on an invoice.
+
+    ``agreed_only`` (the default) counts only measurements that carry a
+    signature. The unsigned ones are still reported in ``measurement_count`` so
+    a foreman can see what is waiting for the client, but they do not move the
+    money.
+    """
+    from sqlalchemy import select
+
+    from app.modules.boq.models import Position as BOQPosition
+    from app.modules.neoffice.models import SiteMeasurement
+
+    positions = (
+        await session.execute(
+            select(BOQPosition)
+            .where(BOQPosition.boq_id == uuid.UUID(boq_id))
+            .order_by(BOQPosition.ordinal)
+        )
+    ).scalars().all()
+    if not positions:
+        raise HTTPException(status_code=404, detail="BOQ not found or empty")
+
+    by_position = {p.id: p for p in positions}
+    measurements = (
+        await session.execute(
+            select(SiteMeasurement).where(
+                SiteMeasurement.boq_position_id.in_(list(by_position.keys()))
+            )
+        )
+    ).scalars().all()
+
+    tally: dict[uuid.UUID, dict[str, Any]] = {}
+    for m in measurements:
+        slot = tally.setdefault(
+            m.boq_position_id, {"qty": Decimal("0"), "count": 0, "agreed": 0}
+        )
+        slot["count"] += 1
+        if m.agreed_at:
+            slot["agreed"] += 1
+        if m.agreed_at or not agreed_only:
+            slot["qty"] += _dec(m.measured_quantity)
+
+    rows: list[dict[str, Any]] = []
+    priced_total = measured_total = priced_total_measured = Decimal("0")
+    positions_measured = 0
+
+    for p in positions:
+        slot = tally.get(p.id)
+        # A heading line carries no unit and no quantity; it is not measurable
+        # and would only add empty rows to the comparison.
+        if not (p.unit or "").strip() and not slot:
+            continue
+
+        priced_qty = _dec(p.quantity)
+        rate = _dec(p.unit_rate)
+        built_qty = slot["qty"] if slot else Decimal("0")
+        variance = built_qty - priced_qty
+        amount = built_qty * rate
+
+        if slot:
+            positions_measured += 1
+            # Only measured positions feed the comparable total. Summing the
+            # whole bill against a handful of measured lines produces a
+            # headline gap that is arithmetically true and factually absurd
+            # ("you are 1.27M under" on day one), which is worse than no
+            # figure at all.
+            priced_total_measured += priced_qty * rate
+        priced_total += priced_qty * rate
+        measured_total += amount
+
+        variance_percent: float | None = None
+        if priced_qty != 0:
+            variance_percent = float(
+                (variance / priced_qty * Decimal("100")).quantize(Decimal("0.001"))
+            )
+
+        if variance > 0:
+            state = "over_run"
+        elif variance < 0:
+            state = "under_run"
+        else:
+            state = "on_target"
+
+        rows.append({
+            "boq_position_id": str(p.id),
+            "ordinal": p.ordinal,
+            "description": p.description,
+            "unit": p.unit or "",
+            "priced_quantity": str(priced_qty),
+            "measured_quantity": str(built_qty),
+            "variance": str(variance),
+            "variance_percent": variance_percent,
+            "status": state,
+            "unit_rate": str(rate),
+            "amount": str(amount),
+            "measurement_count": slot["count"] if slot else 0,
+            "agreed_count": slot["agreed"] if slot else 0,
+        })
+
+    return {
+        "boq_id": boq_id,
+        "agreed_only": agreed_only,
+        "rows": rows,
+        # The whole bill, for context: what the estimate is worth.
+        "priced_total": str(priced_total),
+        # The two figures that may be compared with each other: what the
+        # measured positions were priced at, and what they measured.
+        "priced_total_measured": str(priced_total_measured),
+        "measured_total": str(measured_total),
+        "variance_total": str(measured_total - priced_total_measured),
+        "positions_measured": positions_measured,
+        "positions_total": len(rows),
+    }
