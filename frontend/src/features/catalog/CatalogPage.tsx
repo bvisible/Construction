@@ -39,9 +39,10 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { catalogGuide } from './catalogGuide';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 //// NEOFFICE — apiPut pour l'édition d'une ressource, ajouté à la liste
-//// d'imports qu'upstream a élargie de son côté (formatage localisé).
+//// d'imports qu'upstream a élargie de son côté (fmtList, formatage localisé
+//// des énumérations). Les deux ajouts sont conservés.
 import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from '@/shared/lib/api';
-import { fmtPercent, getIntlLocale, fmtFixed } from '@/shared/lib/formatters';
+import { fmtList, fmtPercent, getIntlLocale, fmtFixed } from '@/shared/lib/formatters';
 import { useToastStore } from '@/stores/useToastStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import { REGION_MAP } from '@/stores/useCostDatabaseStore';
@@ -1157,7 +1158,7 @@ function BuildAssemblyModal({
         message: t('catalog.mixed_currency_block', {
           defaultValue:
             'Selected resources use different currencies ({{codes}}). Build the assembly from resources sharing one currency.',
-          codes: distinctCurrencies.join(', '),
+          codes: fmtList(distinctCurrencies),
         }),
       });
       return;
@@ -1437,7 +1438,7 @@ function BuildAssemblyModal({
                   {t('catalog.mixed_currency_warning', {
                     defaultValue:
                       'Selected resources use {{codes}}. An assembly has a single currency, so amounts cannot be combined. Remove rows until one currency remains.',
-                    codes: distinctCurrencies.join(', '),
+                    codes: fmtList(distinctCurrencies),
                   })}
                 </p>
               </div>

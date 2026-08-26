@@ -662,6 +662,90 @@ jobs:
           tests/unit/core/test_upload_streaming.py
           -q -p no:cacheprovider --timeout=300 --timeout-method=thread
 
+      # The country coverage instrument. Its own step so the guard is visible in
+      # the step list rather than buried in another step's file list.
+      #
+      # It is here at all because tests/unit runs in no lane that blocks a merge,
+      # so all 36 of these ran nowhere in CI. Among them is the only check that
+      # catches the defect the instrument was repaired for: the probe still
+      # answering when the module it reads will not import. The obvious guard,
+      # that no dimension comes back UNRESOLVED anywhere in the cohort, is green
+      # on the broken tree, because the environment that runs the suite is not
+      # the environment that has the bug and the suite therefore cannot see it.
+      # Only the staged-failure test can, and a test that runs in no lane is the
+      # same decoration as a report nobody is on the hook to act on.
+      #
+      # `!cancelled()`, used by this step and the one below it and by nothing
+      # else in this workflow, because these two sit at the end of the job and a
+      # step that fails skips every step below it. This file already names that
+      # hazard: a guard placed last otherwise only runs on the days nothing else
+      # is broken, which is not when you need it. The condition costs nothing
+      # when the job is green and makes the position harmless when it is not.
+      - name: Run country coverage instrument tests
+        if: ${{ !cancelled() }}
+        run: >-
+          pytest tests/unit/test_country_coverage.py
+          -q -p no:cacheprovider --timeout=300 --timeout-method=thread
+
+      # The contract standard registry and the notice engine that reads it.
+      # Same reason as the step above: none of these ran in a lane that blocks a
+      # merge, and it showed. Seven of them were red on main for days while the
+      # only workflow collecting them was the one treated as advisory, and among
+      # the seven was the guard written for exactly the defect that was in the
+      # tree: a standard added to one table and not the neighbouring one. The
+      # guard fired and there was nobody in the room.
+      #
+      # The picker parity file is here rather than with the frontend tests
+      # because it compares a hand-written mirror in the page against the
+      # backend registry, so it needs the backend importable and the frontend
+      # only as text on disk. It is the one guard that fails when the two layers
+      # disagree, which is how a standard the engine returns ended up absent
+      # from the control that selects it.
+      - name: Run contract standard registry and notice engine guards
+        if: ${{ !cancelled() }}
+        run: >-
+          pytest tests/unit/test_contract_standard_registration.py
+          tests/unit/test_contract_standard_matching_hazard.py
+          tests/unit/test_demo_contract_standard.py
+          tests/unit/test_ccdc_notice_periods_are_held_not_guessed.py
+          tests/unit/test_notice_standard_picker_parity.py
+          tests/unit/test_time_bar.py
+          tests/unit/test_time_bar_day_basis.py
+          -q -p no:cacheprovider --timeout=300 --timeout-method=thread
+
+      # What a partner pack declares against what the validation engine has.
+      # The reachability test that already existed asserted has_rules() for a
+      # few set names, which is a fact about the registry and was true the whole
+      # time; it never opened a manifest, so it could not see that fifteen
+      # declarations across seven packs name a standard the engine implements
+      # under a different identifier, and the rules for those have never run.
+      #
+      # This file also checks the section of the partner-pack README that lists
+      # the rule sets, because that section is where the wrong identifiers came
+      # from: it named 36 and 3 of them existed. Its probes each start a fresh
+      # interpreter, so the step is unaffected by what the rest of the job has
+      # imported, and it needs no database.
+      - name: Run partner pack rule set guards
+        if: ${{ !cancelled() }}
+        run: >-
+          pytest tests/unit/test_partner_pack_rule_slugs.py
+          -q -p no:cacheprovider --timeout=300 --timeout-method=thread
+
+      # A browser announces pt-BR, not pt. The catalogue module and the two
+      # /i18n routes have to agree with the Accept-Language middleware about
+      # what that means, and for a long time they did not: the middleware
+      # resolved the tag to its base language and the routes answered 404 for
+      # the identical tag. Nothing held the layers equal, so the disagreement
+      # was invisible from inside either one. These tests read the UI language
+      # list and both server paths, and they need no database.
+      - name: Run locale resolution guards
+        if: ${{ !cancelled() }}
+        run: >-
+          pytest tests/unit/test_backend_locale_falls_back_to_base_language.py
+          tests/unit/test_backend_locale_catalogue.py
+          tests/unit/test_cli_version_matches_the_running_code.py
+          -q -p no:cacheprovider --timeout=300 --timeout-method=thread
+
   # Object ownership and cross-tenant access. Of the 32 files in the repo that
   # test this, exactly one was in a blocking lane; the other 31, all 29 *_idor
   # files among them, were enforced by nothing. That is the class where a gap
@@ -994,12 +1078,14 @@ jobs:
       run:
         working-directory: frontend
     env:
-      # Eleven of the thirty-five files below are jsdom component tests, which
+      # Twelve of the thirty-seven files below are jsdom component tests, which
       # are the expensive kind, and this runner has four cores rather than the
       # twelve the local measurement was taken on. Both figures are counted by
       # parsing this list, never by adding one to what the comment said: it read
       # "nine of twenty-one" while the list held thirty-four, because parallel
-      # sessions each appended an entry without recounting. The whole-program type check
+      # sessions each appended an entry without recounting. Counted two ways
+      # this time and they agree: twelve entries end in .tsx and twelve import
+      # the React testing library, and they are the same twelve. The whole-program type check
       # and the build in the other workflow already need this ceiling and are
       # skipped on macOS because a 9 GB heap does not fit that runner at all.
       # Running the tests under the default heap would be betting the gate on
@@ -1042,8 +1128,10 @@ jobs:
         src/features/schedule/ScheduleResourcePanel.test.tsx
         src/shared/lib/__tests__/formatCompactCurrency.test.ts
         src/shared/lib/__tests__/formattersReadTheLocalePerCall.test.ts
+        src/shared/lib/__tests__/theCallSitesJoinListsInTheReadersLanguage.test.tsx
         src/shared/lib/apiHelpers.fetchAllPages.test.ts
         src/shared/lib/i18nInterpolatedKeys.test.ts
+        src/shared/lib/projectFileFormats.test.ts
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v4

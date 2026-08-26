@@ -39,7 +39,7 @@ import {
 } from '@/shared/ui/WideModal';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet, apiPost, apiDelete, ApiError } from '@/shared/lib/api';
-import { fmtDate } from '@/shared/lib/formatters';
+import { fmtList, fmtDate } from '@/shared/lib/formatters';
 import { formatCurrency as fmtMoney } from '@/shared/lib/money';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -2360,9 +2360,8 @@ export function ChangeOrdersPage() {
                           })}
                         >
                           {t('changeorders.plus_unconverted', { defaultValue: 'plus' })}{' '}
-                          {unconverted
-                            .map(([code, amount]) => `${formatCurrency(Number(amount), code)}`)
-                            .join(', ')}
+                          {fmtList(unconverted
+                            .map(([code, amount]) => `${formatCurrency(Number(amount), code)}`))}
                         </p>
                       )}
                     </>

@@ -51,7 +51,7 @@ import { resolveRowModelId } from './resolveRowModelId';
 import { MiniGeometryPreview } from '@/shared/ui/MiniGeometryPreview';
 import { fetchBIMElementsByIds, fetchBIMElementProperties } from '@/features/bim/api';
 import type { BIMElementData } from '@/shared/ui/BIMViewer/ElementManager';
-import { fmtFixed } from '@/shared/lib/formatters';
+import { fmtList, fmtFixed } from '@/shared/lib/formatters';
 import { getNumberLocale } from '@/stores/usePreferencesStore';
 import { localizedUnitCode } from '@/shared/lib/unitLabels';
 import type { DisplayQuantityApi } from '@/shared/hooks/useDisplayQuantity';
@@ -457,19 +457,19 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
             title={t('boq.section_fx_missing_tooltip', {
               defaultValue:
                 'Section total may be incorrect - no FX rate for: {{codes}}. Click to set rates.',
-              codes: (data as { _fxWarnings: string[] })._fxWarnings.join(', '),
+              codes: fmtList((data as { _fxWarnings: string[] })._fxWarnings),
             })}
             aria-label={t('boq.section_fx_missing_tooltip', {
               defaultValue:
                 'Section total may be incorrect - no FX rate for: {{codes}}. Click to set rates.',
-              codes: (data as { _fxWarnings: string[] })._fxWarnings.join(', '),
+              codes: fmtList((data as { _fxWarnings: string[] })._fxWarnings),
             })}
           >
             <AlertTriangle size={11} strokeWidth={2.2} />
             <span>
               {t('boq.section_fx_missing_short', {
                 defaultValue: 'set FX: {{codes}}',
-                codes: (data as { _fxWarnings: string[] })._fxWarnings.join(', '),
+                codes: fmtList((data as { _fxWarnings: string[] })._fxWarnings),
               })}
             </span>
           </button>

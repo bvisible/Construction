@@ -24,8 +24,10 @@ interface ChangelogEntry {
   version: string;
   date: string;
   /**
-   * One short summary in plain language. Proper-noun-heavy strings stay in English.
-   * Each changelog description must be 1 to 2 sentences.
+   * One summary in plain language. Proper-noun-heavy strings stay in English.
+   * A paragraph, not a headline: say what changed and what it means for the
+   * person reading, and give a number rather than an adjective wherever there
+   * is one to give.
    */
   summary: string;
   tag?: Tag;
@@ -34,9 +36,28 @@ interface ChangelogEntry {
 // Sorted newest to oldest. Sort is enforced at runtime below (semver-aware) so
 // out-of-order entries here still display correctly.
 //
-// RULE: each changelog description must be 1 to 2 sentences. Keep the version,
-// date, title and meaning intact; trim the prose, not the facts.
+// RULE: keep the version, date and meaning intact; trim the prose, not the
+// facts. This used to say one to two sentences, and it had said so through at
+// least eight releases in which every entry written ran to four sentences or
+// more, the shortest of them 1194 characters. A rule nothing on the page obeys
+// is not a standard, it is a thing the next person quietly breaks and then
+// wonders what else here is untrue, so it now describes what is actually done:
+// a paragraph, around fifteen hundred characters, specific.
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '15.9.1',
+    date: '2026-08-25',
+    tag: 'FIX',
+    summary:
+      'Seven partner packs had been asking the validation engine for a standard it already implements and never receiving it: fifteen declarations naming DIN 276, GAEB, NRM, ABNT NBR, SINAPI, CPWD, MasterFormat and two formwork cycle sets under identifiers spelled slightly differently from the ones the engine registers, so working rules sat unused while the installer said only that the entry had no built-in match. The installer now names the identifier that would activate them and still turns nothing on, because several of those rules are error severity and would start failing bills of quantities that pass today. The partner guide that taught the wrong names is corrected: it had introduced a list of thirty six rule-pack identifiers of which three existed, and it now carries the list the registry itself returns and publishes no rule counts, since the count changes with which modules are loaded. The guard behind it reads the pack manifests, which the test before it never did, and it blocks a merge. The Uzbek bundle spells its own letters again after a batch wrote nine hundred and eighty one characters as escapes, which broke nothing but left a translator reading six characters where the reader sees one, and split two honest measurements of how far the language still is from English; the reader-visible figure is 1570 strings, not the 1565 quoted last release, and both measurements now agree. Two files classifying translation leaks are gone: nothing read them, and fifteen of the eighteen keys they classified do not exist. A browser that announces pt-BR, es-MX or en-US is now served by the language behind the code everywhere: the interface always resolved those, the server did so in one place out of four, and the route that serves a catalogue by name refused the regional code outright with a not found, so one reader could be told two different things about one language depending on which way they asked. The version the command line prints is the version that is running, where it used to ask the installed distribution first and print 15.2.0 for a tree at 15.9.1 while the health endpoint in the same process said 15.9.1. An upgrade can also reach the current schema from the schema the product itself installs: the default runtime builds its tables from the models and stamps the head afterwards, so it never executes a revision, and three revisions that added a currency column without looking first killed the upgrade anyone ran to close that gap, taking the two behind them with it. A project that was never given a country is stored as Germany, and the column now says so: it is not nullable and defaults to DE, so an unset country and a chosen Germany are the same row, and both the working calendar and the payment-application country gate answer for Germany without marking it a guess. That behaviour is unchanged here, only written down, because correcting it needs a migration and a decision about what an unset country should mean.',
+  },
+  {
+    version: '15.9.0',
+    date: '2026-08-25',
+    tag: 'NEW',
+    summary:
+      'A backup that never happened could not be told from one that did, because every instrument read the schedule rather than the dumps; the new check reads the artefacts themselves and an empty directory is a verdict instead of missing input, so it cannot pass on a host where backups have never run. The country coverage instrument stopped claiming more than it knew: nine verdicts had been given the strongest class of evidence without having it, and one probe answered confidently while the module it reads would not import at all, which is the failure a coverage report is least able to survive. Every verdict now travels with the reason it was reached, and the guard that catches a probe still answering when its subject is broken runs in a lane that blocks a merge. A Canadian contract standard the engine learned to recognise last release could not be selected on the screen that displayed it, because the page keeps a hand written copy of the registry and nothing had ever compared the two; both copies carry it now, and a test compares them on every run, including the quieter direction where a value the backend cannot resolve falls through to the project standard and says nothing. The tests around that standard also learned its third answer, so a contract family whose notice periods are deliberately held returns no deadline rather than a twenty eight day countdown borrowed from a generic fallback. Twelve guards now stand over the translation files and the twelfth asks the compiler rather than bringing a reader of its own, after a bundle with a missing comma reached a commit past four green gates. A translation can no longer ask for a variable nobody passes, lists of things join the way the reader language joins them rather than with a comma borrowed from Latin script, and the places that still use a literal comma are counted with a reason each. Measured against English, Uzbek closes nearly four thousand strings, German two hundred and seventy seven and Dutch two hundred and forty one, while French, Swedish and Norwegian did not move; a French batch was written and then reverted because it could not be verified, and the language second in line for this work received none of it. A viewpoint with no snapshot stopped being drawn as a broken image, seven demonstration projects that had never been offered a model to attach now have one, and on the desktop an upgrade can no longer wait forever on a step that usually does nothing.',
+  },
   {
     version: '15.8.0',
     date: '2026-08-25',

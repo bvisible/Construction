@@ -91,7 +91,7 @@ import {
 import { bidManagementGuide } from './bidManagementGuide';
 import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
 import { buildBidManagementInsights } from './bidManagementInsights';
-import { fmtFixed } from '@/shared/lib/formatters';
+import { fmtList, fmtFixed } from '@/shared/lib/formatters';
 import { getNumberLocale } from '@/stores/usePreferencesStore';
 
 // English fallbacks for the computed `bid_management.prequal_*` keys. The default used to be
@@ -361,7 +361,7 @@ function SubcontractorPickerModal({
                   </span>
                   {sub.trade_categories.length > 0 && (
                     <span className="block truncate text-xs text-content-tertiary">
-                      {sub.trade_categories.slice(0, 3).join(', ')}
+                      {fmtList(sub.trade_categories.slice(0, 3))}
                     </span>
                   )}
                 </span>

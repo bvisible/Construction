@@ -79,7 +79,7 @@ import {
 } from './thresholds';
 import { ThresholdRulesModal } from './ThresholdRulesModal';
 import { cadExplorerGuide } from './cadExplorerGuide';
-import { fmtPercent, getIntlLocale } from '@/shared/lib/formatters';
+import { fmtList, fmtPercent, getIntlLocale } from '@/shared/lib/formatters';
 import { getNumberLocale } from '@/stores/usePreferencesStore';
 
 /* ── Recharts - lazy-loaded so the initial Data Explorer bundle stays lean.
@@ -318,7 +318,7 @@ function SlicerBanner() {
               title={t('explorer.delete_view', { defaultValue: 'Remove' })}
             >
               <span className="max-w-[140px] truncate">
-                {s.column} = {s.values.join(', ')}
+                {s.column} = {fmtList(s.values)}
               </span>
               <X size={10} />
             </button>

@@ -14,7 +14,7 @@ import {
 import { Button, Card, Badge, DismissibleInfo, IntroRichText, EmptyState, SkeletonGrid, Breadcrumb, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { apiGet, apiPost, apiDelete } from '@/shared/lib/api';
-import { getIntlLocale } from '@/shared/lib/formatters';
+import { fmtList, getIntlLocale } from '@/shared/lib/formatters';
 import { unitLabel } from '@/shared/lib/unitLabels';
 import { copyToClipboard } from '@/shared/lib/browser';
 import { useToastStore } from '@/stores/useToastStore';
@@ -560,9 +560,8 @@ export function AssembliesPage() {
             value={String(banner.totalCount)}
             title={
               banner.mostUsed.length > 0
-                ? `${t('assemblies.stat_most_used', { defaultValue: 'Most used' })}: ${banner.mostUsed
-                    .map((m) => `${m.name} (${m.usage_count})`)
-                    .join(', ')}`
+                ? `${t('assemblies.stat_most_used', { defaultValue: 'Most used' })}: ${fmtList(banner.mostUsed
+                    .map((m) => `${m.name} (${m.usage_count})`))}`
                 : undefined
             }
           />
@@ -606,7 +605,7 @@ export function AssembliesPage() {
             label={t('assemblies.stat_top_categories', { defaultValue: 'Top categories' })}
             value={
               banner.topCategories.length > 0
-                ? banner.topCategories.map(([c, n]) => `${c} (${n})`).join(', ')
+                ? fmtList(banner.topCategories.map(([c, n]) => `${c} (${n})`))
                 : '—'
             }
             valueClassName="text-xs leading-snug"

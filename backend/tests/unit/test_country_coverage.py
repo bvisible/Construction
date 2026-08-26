@@ -14,6 +14,10 @@ every count downstream of it is wrong in the comfortable direction.
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import pytest
 
 from app.core import country_coverage as cc
@@ -22,6 +26,16 @@ from app.modules.payment_clock import data as payment_clock_data
 # Countries with enough spread to exercise the verdicts: a large market with
 # broad coverage, one known to be partly covered, one Gulf state, two Asian.
 _SWEEP = ("US", "CA", "DE", "GB", "AE", "CN", "IN", "BR", "SA", "NL", "JP", "MX")
+
+# The register's working cohort plus the rest of the large markets. Wider than
+# _SWEEP on purpose: a probe that answers for one country and goes quiet for its
+# neighbour is the failure this file exists to catch, and a narrow list hides it.
+_COHORT = (
+    "US", "CA", "DE", "BG", "RU", "CN", "IN", "BR", "NG", "GB", "FR", "ES",
+    "IT", "NL", "PL", "JP", "KR", "AU", "MX", "SA", "AE", "ZA", "TR",
+)  # fmt: skip
+
+_SCHEDULE_SERVICE = "app.modules.schedule.service"
 
 
 def test_the_manifest_has_probes_and_they_all_have_distinct_names():
@@ -101,15 +115,19 @@ def _sweep() -> list[cc.DimensionReport]:
     return out
 
 
-def test_the_schedule_resolver_answers_when_the_app_is_importable():
-    """On a laptop with no cluster this probe declines to guess; here it must not.
+def test_the_schedule_resolver_answers_through_the_import_it_has_here():
+    """The probe takes the import path when the import is available, as it is here.
 
-    Without this, the FALLBACK path would never be exercised by anything: the
-    probe would report UNRESOLVED in every environment and the suite would go
-    green over a verdict that had never once been produced.
+    This test used to say that the probe declines to guess on a laptop with no
+    cluster, and it was the whole trouble: that was true, the probe reported
+    UNRESOLVED for every country off a database, and this test could never see
+    it because pytest boots one. It now asserts the narrower thing it is
+    actually able to observe - that where the import works, the import is what
+    answered. The case it could not reach is staged explicitly further down.
     """
     got = _one("CA", "calendar.schedule_regions")
     assert got.verdict != cc.UNRESOLVED, f"the resolver was not importable even under the test harness: {got.detail}"
+    assert got.method == "import", f"a cluster is up, so the import path should have answered, not {got.method!r}"
 
 
 @pytest.mark.parametrize("verdict", [cc.COVERED, cc.FALLBACK, cc.MISSING, cc.NOT_KEYED, cc.ABSENT])
@@ -240,3 +258,306 @@ def test_the_report_says_which_method_answered():
 def test_the_country_code_is_normalised():
     assert cc.country_coverage("ca").country_code == "CA"
     assert cc.country_coverage(" us ").country_code == "US"
+
+
+# --------------------------------------------------------------------------- #
+# The distinction is only closed if it reaches the page a human reads
+# --------------------------------------------------------------------------- #
+
+
+def _reporter():
+    """The command-line reporter, loaded by path because scripts/ is not a package."""
+    path = Path(cc.__file__).resolve().parents[2] / "scripts" / "country_coverage.py"
+    spec = importlib.util.spec_from_file_location("country_coverage_reporter", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_page_says_how_the_verdicts_were_read_in_both_directions():
+    """Provenance is stated in words, never implied by the absence of a mark.
+
+    The per-verdict marks are printed only for a read of the file on disk, so a
+    fully imported run carries none at all and is indistinguishable, on the
+    page, from a run by a tool that never tracked provenance. That fully
+    imported run is what a machine with a cluster produces, which is the exact
+    environment this instrument's own defect survived in.
+    """
+    reporter = _reporter()
+
+    clean = reporter._provenance({"import": 253})
+    assert len(clean) == 1, clean
+    assert "all 253 verdicts came from importing the live module" in clean[0]
+
+    # A table parsed on purpose is not a degraded import and must not be called one.
+    parsed = reporter._provenance({"import": 252, "source": 1})
+    assert any("252 from importing the live module" in line for line in parsed), parsed
+    assert not any("weaker evidence" in line for line in parsed), (
+        f"a deliberate structural parse was reported as weaker evidence: {parsed}"
+    )
+
+    fell_back = reporter._provenance({"import": 230, "source (RuntimeError on import)": 23})
+    assert any("230 from importing the live module" in line for line in fell_back), fell_back
+    assert any("23 of those name an exception" in line for line in fell_back), fell_back
+    assert any("weaker evidence" in line for line in fell_back), fell_back
+
+    # A verdict that read nothing must not be totalled as one that read the module.
+    nothing = reporter._provenance({"import": 90, "declared (no registry exists)": 9, "(none)": 2})
+    assert any("90 from importing the live module" in line for line in nothing), nothing
+    assert any("9 declared (no registry exists)" in line for line in nothing), nothing
+    assert any("2 from nothing at all" in line for line in nothing), nothing
+    assert not any("weaker evidence" in line for line in nothing), nothing
+
+    # Two reasons to declare something get two clauses. One clause covering both
+    # would still read as true, which is why this is asserted rather than left to
+    # a reading of the code: the failure is a sentence that stays grammatical
+    # while becoming false, and nothing about the output would look wrong.
+    two = reporter._provenance(
+        {
+            "import": 90,
+            "declared (no registry exists)": 9,
+            "declared (the registry is a service we do not call)": 4,
+        }
+    )
+    assert any("9 declared (no registry exists)" in line for line in two), two
+    assert any("4 declared (the registry is a service we do not call)" in line for line in two), two
+    assert not any("13 declared" in line for line in two), (
+        f"two reasons were merged into one clause and one of them is now described wrongly: {two}"
+    )
+
+
+def test_the_printed_census_names_its_provenance_on_the_import_path_too(monkeypatch, capsys):
+    """End to end, on the path that used to print nothing about how it read.
+
+    Asserted against the reporter's real output rather than against the field,
+    because a method string that only a test ever reads closes nothing: the
+    failure this instrument exists to prevent is a human being unable to tell a
+    gap in the product from a gap in the instrument.
+    """
+    reporter = _reporter()
+    monkeypatch.setattr(sys, "argv", ["country_coverage.py", "DE"])
+    assert reporter.main() == 0
+
+    out = capsys.readouterr().out
+    assert "registry limits:" in out, out
+    assert "[read by import]" in out, "the census line went unlabelled on the import path"
+    assert "provenance:" in out, "the page never said how the verdicts were read"
+    assert "from importing the live module" in out, out
+    assert "declared (no registry exists)" in out, out
+
+
+def test_the_page_names_the_interpreter_that_produced_it(monkeypatch, capsys):
+    """The same tree prints a different page under a different interpreter.
+
+    Nine countries came back with eighteen verdicts read from source under one
+    interpreter and eighteen read from nothing at all under another, because a
+    dependency was installed in one and missing in the other. Provenance that
+    names the method but not the interpreter stops one level above the thing
+    that actually decided the page, so this line is printed on every run.
+    """
+    reporter = _reporter()
+    monkeypatch.setattr(sys, "argv", ["country_coverage.py", "DE"])
+    reporter.main()
+
+    out = capsys.readouterr().out
+    assert "interpreter:" in out, "the page never said which interpreter produced it"
+    assert sys.executable in out, out
+    # Healthy runs too. A line printed only when something is wrong makes its
+    # absence carry meaning, which is the defect this whole lane started from.
+    assert "instrument healthy" in out, "expected a healthy run here; the assertion above is now untested"
+
+
+def test_the_unhealthy_exit_names_the_package_and_not_only_the_exception():
+    """A reader should not have to decode ModuleNotFoundError into an action."""
+    reporter = _reporter()
+
+    details = [
+        "probe raised ModuleNotFoundError: No module named 'hijridate'",
+        "probe raised ModuleNotFoundError: No module named 'hijridate'",
+        "probe raised RuntimeError: no cluster",
+    ]
+    assert reporter._missing_packages(details) == ["hijridate"], "one missing package, named once"
+
+    # A submodule failure names the distribution somebody would install, not the
+    # dotted path, which is not a thing that can be installed.
+    assert reporter._missing_packages(["No module named 'lxml.etree'"]) == ["lxml"]
+    assert reporter._missing_packages(["probe raised RuntimeError: no cluster"]) == []
+
+
+def test_a_probe_that_read_nothing_does_not_report_that_it_imported():
+    """The method default is "import", so silence there is a claim, not an absence.
+
+    security_of_payment has no registry to import and is declared from a reading
+    of the tree, and a probe that raised read nothing at all. Both used to
+    inherit the default and be counted on the printed page among the verdicts
+    taken from the live module, which is the same small untruth the schedule
+    probe carried on its failure path.
+    """
+    absent = _one("DE", "security_of_payment.deadlines")
+    assert absent.verdict == cc.ABSENT
+    assert absent.method.startswith("declared"), f"a probe with nothing to import reported {absent.method!r}"
+    # The reason has to be on the verdict, because the reporter groups on this
+    # string and prints it verbatim rather than supplying a reason of its own.
+    assert absent.method != "declared", "a declared verdict must say why it was declared"
+
+    raised = cc._run("probe.that.raises", _raise_on_purpose, "DE")
+    assert raised.verdict == cc.UNRESOLVED
+    assert raised.method == "(none)", f"a probe that raised reported {raised.method!r}"
+
+
+def _raise_on_purpose(country: str):
+    raise RuntimeError("staged failure")
+
+
+# --------------------------------------------------------------------------- #
+# A shared row is a limit, and a limit nobody counts is one that gets
+# rediscovered rather than remembered
+# --------------------------------------------------------------------------- #
+
+
+def test_the_shared_row_census_is_taken_over_the_axis_and_not_over_the_cohort():
+    """The figure must not move when the list of countries somebody asks about does.
+
+    Drawn from _COHORT this same fact would read as 2, because the cohort holds
+    DE and SA and none of the other six countries on a shared row. The register
+    would then print a number that grows whenever the cohort does, which is the
+    failure mode the module's own prose warns about two paragraphs further up.
+    The assertion that catches it is the one on AT, BH, CH, KW, OM and QA: they
+    are on the axis, they are on a shared row, and they are in no cohort here.
+    """
+    census = cc.shared_calendar_rows()
+    assert census.on_axis == 18, f"the axis moved: {census.on_axis}"
+    assert len(census.on_shared_row) == 8, f"expected 8 on a shared row, got {census.on_shared_row}"
+    assert set(census.shared) == {"DACH", "GULF"}, f"the shared rows moved: {sorted(census.shared)}"
+    off_cohort = set(census.on_shared_row) - set(_COHORT)
+    assert off_cohort == {"AT", "BH", "CH", "KW", "OM", "QA"}, (
+        f"the census looks drawn from the cohort rather than from the registry: {off_cohort}"
+    )
+    assert "8 of 18" in census.summary(), census.summary()
+
+
+def test_the_two_registry_figures_are_separate_measurements_of_the_same_axis():
+    """Sixteen of eighteen and eight of eighteen are different facts, and both are quoted.
+
+    Sixteen is how many countries on the axis are not keys of the table at all,
+    which is why the probe is forbidden from reading the table. Eight is how
+    many share their row, which is the limit the register prints. They
+    decompose exactly: eight are only spelled differently, eight actually share.
+    Swapping one number for the other in a sentence would leave every other
+    check in this file green, so the arithmetic is asserted rather than trusted.
+    """
+    calendars, _resolve, axis, _method = cc._schedule_registry()
+    not_a_key = {code for code in axis if code not in calendars}
+    shared = set(cc.shared_calendar_rows().on_shared_row)
+    assert len(not_a_key) == 16, f"countries missing from the table keys moved: {sorted(not_a_key)}"
+    assert len(shared) == 8, f"countries on a shared row moved: {sorted(shared)}"
+    assert shared < not_a_key, "a country on a shared row was also a table key; the decomposition changed"
+    assert len(not_a_key - shared) == 8, f"the 8 + 8 = 16 decomposition broke: {sorted(not_a_key - shared)}"
+
+
+def test_a_shared_row_is_named_on_the_country_report_and_counted_in_its_summary():
+    """Named where one country is read, counted where the country is summarised."""
+    de = _one("DE", "calendar.schedule_regions")
+    assert de.verdict == cc.COVERED, f"DACH is a real regional week, not a stand-in: {de.detail}"
+    assert de.shares_row_with == ("AT", "CH"), de.shares_row_with
+    assert cc.SHARED_ROW in de.detail, de.detail
+
+    sa = _one("SA", "calendar.schedule_regions")
+    assert sa.shares_row_with == ("BH", "KW", "OM", "QA"), sa.shares_row_with
+
+    us = _one("US", "calendar.schedule_regions")
+    assert us.verdict == cc.COVERED, us.detail
+    assert us.shares_row_with == (), f"US has the US row to itself: {us.shares_row_with}"
+    assert cc.SHARED_ROW not in us.detail, us.detail
+
+    assert "1 on a shared row" in cc.country_coverage("DE").summary()
+    assert "0 on a shared row" in cc.country_coverage("US").summary()
+
+
+def test_the_census_reads_the_same_registry_when_the_import_is_gone(monkeypatch):
+    """The registry figure survives the same missing database the probe does."""
+    live = cc.shared_calendar_rows()
+    assert live.method == "import"
+
+    monkeypatch.setitem(sys.modules, _SCHEDULE_SERVICE, None)
+    off = cc.shared_calendar_rows()
+    assert off.method.startswith("source"), f"an isolated read must not be labelled {off.method!r}"
+    assert off.shared == live.shared, f"{off.shared} != {live.shared}"
+    assert off.on_own_row == live.on_own_row, f"{off.on_own_row} != {live.on_own_row}"
+
+
+# --------------------------------------------------------------------------- #
+# A probe that goes quiet has stopped measuring, and says so in a way that reads
+# like a small denominator rather than like a hole
+# --------------------------------------------------------------------------- #
+
+
+def test_no_dimension_is_unresolved_anywhere_in_the_cohort():
+    """No dimension fails to read its registry, for any country in the cohort.
+
+    This is a floor, not the guard. It passes on a tree where the schedule probe
+    is broken, because pytest boots a database and the probe's import therefore
+    succeeds here and nowhere else. Read a failure of this test as "some probe
+    lost its registry"; read the test below as the one that checks the probe
+    still answers when the import is the thing that went away.
+    """
+    silent: dict[str, list[str]] = {}
+    for code in _COHORT:
+        for d in cc.country_coverage(code).by_verdict(cc.UNRESOLVED):
+            silent.setdefault(d.dimension, []).append(f"{code}: {d.detail}")
+    assert not silent, f"dimensions that could not read their registry: {silent}"
+
+
+def test_the_schedule_probe_still_answers_when_its_module_will_not_import(monkeypatch):
+    """The probe answers off a cluster, where its module cannot be imported.
+
+    Importing app.modules.schedule.service reaches app.database, which builds an
+    engine at import time and raises without a PostgreSQL URL. That is the
+    ordinary state of a developer machine with nothing running, and it is the
+    state the probe was silent in for every country while the suite stayed green.
+
+    Putting None in sys.modules makes the import raise ModuleNotFoundError, which
+    is the same shape of failure and does not need the database taken away from
+    the rest of the session.
+    """
+    monkeypatch.setitem(sys.modules, _SCHEDULE_SERVICE, None)
+    got = _one("DE", "calendar.schedule_regions")
+    assert got.verdict != cc.UNRESOLVED, f"the probe went silent without its import: {got.detail}"
+    assert got.method.startswith("source"), f"a read of the file on disk must not be labelled {got.method!r}"
+    assert got.population, "the probe answered without naming the regions it read"
+
+
+def test_the_isolated_read_and_the_import_agree_about_every_country(monkeypatch):
+    """The fallback path returns what the import path returns, country by country.
+
+    This is the test that makes the fix honest rather than convenient. An edit
+    that widens a probe until it answers can be told from one that reads the
+    registry correctly by exactly this: the answers off the cluster have to be
+    the answers the live module gives, including the ones that are not COVERED.
+    """
+    live = {code: _one(code, "calendar.schedule_regions") for code in _COHORT}
+    assert {d.method for d in live.values()} == {"import"}, "this test needs the import path to be the live one"
+    assert len({d.verdict for d in live.values()}) > 1, "one verdict everywhere; this proves nothing about agreement"
+
+    monkeypatch.setitem(sys.modules, _SCHEDULE_SERVICE, None)
+    disagreed = {
+        code: (live[code].verdict, off.verdict)
+        for code in _COHORT
+        if (off := _one(code, "calendar.schedule_regions")).verdict != live[code].verdict
+    }
+    assert not disagreed, f"the isolated read answered differently from the import: {disagreed}"
+
+
+def test_the_schedule_probe_is_unresolved_when_the_registry_itself_is_renamed(monkeypatch):
+    """A renamed registry is a finding about the tree, not something to route around.
+
+    The probe has two ways to reach the calendars and must not use the second to
+    paper over a symbol the first proved is gone. Here the import succeeds and
+    the name does not exist, so the answer has to be UNRESOLVED rather than a
+    confident one assembled from the file on disk.
+    """
+    import app.modules.schedule.service as svc
+
+    monkeypatch.delattr(svc, "WORK_CALENDARS", raising=True)
+    got = _one("DE", "calendar.schedule_regions")
+    assert got.verdict == cc.UNRESOLVED, f"a missing registry was answered anyway: {got.verdict} / {got.detail}"

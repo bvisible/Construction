@@ -621,7 +621,15 @@ def check_locales_bundled() -> Check:
             f"{len(loaded)} of {len(locales)} locales loaded, absent: {missing}",
             _repair_hint("Reinstall the pip package to get the whole catalogue."),
         )
-    return Check("Translation catalogue", "ok", f"all {len(loaded)} locales loaded")
+    # "all N loaded" on its own reads as full language coverage and is not.
+    # This catalogue holds the strings the SERVER writes, and it is a different
+    # and shorter list than the languages the UI offers: 28 against 41 at the
+    # time of writing, with nine of the offered languages having no file here
+    # at all and reading English for anything the server produces. Counting
+    # them here would mean the backend reading a frontend source file, which it
+    # does nowhere else, so this says what it is counting instead and leaves
+    # the comparison to the guard that owns it.
+    return Check("Translation catalogue", "ok", f"all {len(loaded)} server-side locales loaded")
 
 
 def check_env_overrides() -> Check:
@@ -1580,29 +1588,44 @@ def cmd_upgrade(args: argparse.Namespace) -> None:
 def _resolve_version() -> str:
     """Best-effort version lookup shared by welcome, version and upgrade.
 
-    The fallback reads the field rather than the model because ``app_version``
-    is declared with ``default_factory``, and a field declared that way has no
-    ``default``: pydantic stores the ``PydanticUndefined`` sentinel there. That
-    sentinel has a ``__str__``, so the old code did not raise and did not fall
-    through to "unknown" either. It printed ``OpenConstructionERP
-    vPydanticUndefined`` at the one moment this path exists for, which is an
-    install whose package metadata cannot be read.
+    Settings first, package metadata second. It used to be the other way round,
+    and that made this command disagree with the server it was standing next
+    to. ``importlib.metadata`` reports whatever distribution is installed in
+    the environment, which on a source checkout with any earlier
+    ``pip install openconstructionerp`` in it is not the code that is running:
+    this printed v15.2.0 for a tree at 15.9.1 while ``/api/health`` on the same
+    interpreter correctly said 15.9.1. Settings resolves through
+    ``config._detect_version``, which prefers the pyproject beside the running
+    source and exists for exactly this reason, so asking it puts the two back
+    in agreement. The metadata lookup stays as the fallback, which is what a
+    real installed copy hits anyway since there is no source tree above it.
 
-    Both branches are kept because either declaration is legitimate and this
-    function must not break the next time somebody changes which one is used.
+    ``doctor`` still asks the metadata directly and should: the question there
+    is whether a distribution is installed at all, not what the running code
+    is.
+
+    The Settings branch reads the field rather than the model because
+    ``app_version`` is declared with ``default_factory``, and a field declared
+    that way has no ``default``: pydantic stores the ``PydanticUndefined``
+    sentinel there. That sentinel has a ``__str__``, so the old code did not
+    raise and did not fall through to "unknown" either. It printed
+    ``OpenConstructionERP vPydanticUndefined`` at the one moment that path
+    exists for. Both branches are kept because either declaration is
+    legitimate and this function must not break the next time somebody changes
+    which one is used.
     """
     try:
-        from importlib.metadata import version as _v
+        from app.config import Settings
 
-        return _v("openconstructionerp")
+        field = Settings.model_fields["app_version"]
+        if field.default_factory is not None:
+            return str(field.default_factory())  # type: ignore[call-arg]
+        return str(field.default)
     except Exception:
         try:
-            from app.config import Settings
+            from importlib.metadata import version as _v
 
-            field = Settings.model_fields["app_version"]
-            if field.default_factory is not None:
-                return str(field.default_factory())  # type: ignore[call-arg]
-            return str(field.default)
+            return _v("openconstructionerp")
         except Exception:
             return "unknown"
 

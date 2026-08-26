@@ -32,7 +32,7 @@ import {
   reportBackgroundIndexFailure,
   VECTOR_READY_MIN_COUNT,
 } from './vectorIndex';
-import { formatFileSize } from '@/shared/lib/formatters';
+import { fmtList, formatFileSize } from '@/shared/lib/formatters';
 import { COMMON_CURRENCIES } from '@/features/boq/boqHelpers';
 import { fetchCostCatalogs, type CostCatalog } from './api';
 import { ResourcePriceSheetPanel } from './ResourcePriceSheetPanel';
@@ -2213,7 +2213,7 @@ function ColumnMappingPanel({
             <AlertTriangle size={13} className="shrink-0" />
             {t('costs_catalogs.import_required_missing', {
               defaultValue: 'Map the required columns before importing: {{fields}}.',
-              fields: unmappedRequired.map((f) => fieldMeta(f).label).join(', '),
+              fields: fmtList(unmappedRequired.map((f) => fieldMeta(f).label)),
             })}
           </span>
         )}
